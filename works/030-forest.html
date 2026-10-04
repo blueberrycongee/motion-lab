@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forest</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #5f6457; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+
+const vertex = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const fragment = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform float uTime;
+out vec4 outColor;
+
+const float FOCAL = 1.45;
+const float CELL = 2.4;            // one mushroom or one trunk per cell
+const float LOOP = 64.0;           // the forest repeats after this many cells along the path
+const float SPEED = 0.32;
+const vec3 SUN = vec3(0.33, 0.12, -1.0);    // low, just right of the path ahead
+const vec3 SUNLIGHT = vec3(1.0, 0.76, 0.5);
+const vec3 SHADE = vec3(0.26, 0.33, 0.32);
+const vec3 HAZE = vec3(0.42, 0.44, 0.36);
+
+vec3 gLocal;       // the nearest mushroom's frame at the last map() point, for shading
+float gTint;
+
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(vec3(i, 0.0)), hash(vec3(i + vec2(1, 0), 0.0)), f.x),
+             mix(hash(vec3(i + vec2(0, 1), 0.0)), hash(vec3(i + vec2(1, 1), 0.0)), f.x), f.y);
+}
+
+mat2 rotation(float a) {
+  float s = sin(a), c = cos(a);
+  return mat2(c, s, -s, c);
+}
+
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom: ground at y = 0, cap top near y = 1.11, cap about 1.12 wide.
+// Returns distance and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom(vec3 p) {
+  p.x -= 0.05 * p.y * p.y;                       // a slight lean
+  float r = length(p.xz);
+
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43) * 0.8;
+
+  float frill = 0.008 * sin(atan(p.z, p.x) * 9.0);
+  float skirt = abs(r - (0.096 + (0.66 - p.y) * 0.32 + frill * smoothstep(0.64, 0.56, p.y))) - 0.009;
+  float ring = max(skirt, abs(p.y - 0.605) - 0.05) * 0.7;
+
+  vec3 c = p - vec3(0.0, 0.8, 0.0);
+  float dome = sdEllipsoid(c, vec3(0.56, 0.31, 0.56));
+  dome += 0.008 * sin(c.x * 11.0 + 1.3) * sin(c.z * 9.0) * sin(c.y * 7.0 + c.x * 5.0);
+  float under = 0.82 + 0.08 * (1.0 - min(r * r / 0.31, 1.0));
+  float cap = max(dome, under - p.y);
+  float gills = max(dome + 0.02, max(p.y - under - 0.004, under - 0.04 - p.y));
+
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  float body = smin(stem, max(cap, gills), 0.03);
+  if (body < res.x - 0.001) res = vec2(body, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+
+float rand(vec2 cell, float k) {
+  return hash(vec3(cell.x, mod(cell.y, LOOP), k));
+}
+
+vec2 cellCentre(vec2 cell) {
+  return (cell + 0.5) * CELL + (vec2(rand(cell, 4.0), rand(cell, 5.0)) - 0.5) * 0.4;
+}
+
+// A few cells away from the path hold a trunk instead of a mushroom.
+float trunkRadius(vec2 cell) {
+  if (abs(cell.x + 0.5) < 1.0) return 0.0;
+  return rand(cell, 1.0) < 0.17 ? 0.55 + 0.4 * rand(cell, 2.0) : 0.0;
+}
+
+float trunk(vec3 p, vec2 cell, float radius) {
+  vec2 d = p.xz - cellCentre(cell);
+  float roots = 0.12 * (0.5 + 0.5 * sin(atan(d.y, d.x) * 5.0 + rand(cell, 3.0) * 6.3));
+  float flare = (0.25 + roots) * exp(-p.y * 2.5);
+  return (length(d) - radius - flare) * 0.8;
+}
+
+// Each mushroom differs in size, lean, the way it faces and how its cap is tipped.
+float shroom(vec3 p, vec2 cell, out float part) {
+  float size = 0.5 + 0.55 * rand(cell, 3.0);
+  vec2 at = cellCentre(cell);
+  vec3 q = (p - vec3(at.x, 0.0, at.y)) / size;
+  part = 2.0;
+  float bound = length(q - vec3(0.0, 0.55, 0.0)) - 0.85;
+  if (bound > 0.1) return bound * size;
+  q.xz = rotation(rand(cell, 6.0) * 6.283) * q.xz;
+  q.xy = rotation((rand(cell, 7.0) - 0.5) * 0.36) * q.xy;
+  vec2 zy = q.zy - vec2(0.0, 0.8);
+  q.zy = rotation((rand(cell, 9.0) - 0.5) * 0.4 * smoothstep(0.6, 0.85, q.y)) * zy + vec2(0.0, 0.8);
+  vec2 m = mushroom(q);
+  part = m.y;
+  gLocal = q;
+  gTint = rand(cell, 10.0);
+  return m.x * size * 0.9;
+}
+
+// Only the four cells nearest p are checked, so a step never goes further than
+// half a cell, where something in the next cells could start. Parts: 0-3 mushroom, 4 trunk.
+vec2 map(vec3 p) {
+  vec2 g = p.xz / CELL;
+  vec2 base = floor(g);
+  vec2 side = step(0.5, fract(g)) * 2.0 - 1.0;
+  vec2 res = vec2(CELL * 0.5, -1.0);
+  for (int i = 0; i < 4; i++) {
+    vec2 cell = base + vec2(i & 1, i >> 1) * side;
+    float radius = trunkRadius(cell);
+    if (radius > 0.0) {
+      float d = trunk(p, cell, radius);
+      if (d < res.x) res = vec2(d, 4.0);
+    } else if (rand(cell, 8.0) > 0.22) {
+      vec3 local = gLocal;
+      float tint = gTint, part;
+      float d = shroom(p, cell, part);
+      if (d < res.x) res = vec2(d, part);
+      else { gLocal = local; gTint = tint; }
+    }
+  }
+  return res;
+}
+
+vec3 normalAt(vec3 p) {
+  vec2 e = vec2(0.0015, 0.0);
+  return normalize(vec3(map(p + e.xyy).x - map(p - e.xyy).x,
+                        map(p + e.yxy).x - map(p - e.yxy).x,
+                        map(p + e.yyx).x - map(p - e.yyx).x));
+}
+
+float softShadow(vec3 ro, vec3 rd) {
+  float res = 1.0, t = 0.02;
+  for (int i = 0; i < 40; i++) {
+    float h = map(ro + rd * t).x;
+    res = min(res, 8.0 * h / t);
+    t += clamp(h, 0.02, 0.6);
+    if (res < 0.002 || t > 9.0) break;
+  }
+  return clamp(res, 0.0, 1.0);
+}
+
+float occlusion(vec3 p, vec3 n) {
+  float o = 0.0, w = 1.0;
+  for (int i = 1; i <= 4; i++) {
+    float h = 0.03 + 0.08 * float(i);
+    o += (h - map(p + n * h).x) * w;
+    w *= 0.7;
+  }
+  return clamp(1.0 - 1.8 * o, 0.0, 1.0);
+}
+
+float warts(vec3 p) {
+  vec3 g = p * 10.0;
+  vec3 i = floor(g), f = fract(g);
+  float d = 1e9;
+  for (int z = -1; z <= 1; z++)
+  for (int y = -1; y <= 1; y++)
+  for (int x = -1; x <= 1; x++) {
+    vec3 o = vec3(x, y, z);
+    vec3 j = o + vec3(hash(i + o), hash(i + o + 7.1), hash(i + o + 3.7));
+    d = min(d, length(j - f) * (0.7 + 0.6 * hash(i + o + 1.3)));
+  }
+  return 1.0 - smoothstep(0.18, 0.26, d);
+}
+
+vec3 mushroomAlbedo(vec3 q, vec3 n, float part) {
+  q.x -= 0.05 * q.y * q.y;
+  float r = length(q.xz);
+  if (part < 0.5) {
+    vec3 cap = mix(vec3(0.42, 0.06, 0.035), vec3(0.70, 0.22, 0.06), smoothstep(0.2, 0.56, r));
+    cap *= 0.85 + 0.3 * gTint;
+    return mix(cap, vec3(0.86, 0.82, 0.72), warts(q - vec3(0.0, 0.8, 0.0)) * smoothstep(0.0, 0.3, n.y + 0.2));
+  }
+  if (part < 1.5) return vec3(0.82, 0.77, 0.66) * (0.7 + 0.15 * cos(atan(q.z, q.x) * 70.0));
+  return mix(vec3(0.62, 0.58, 0.5), vec3(0.93, 0.9, 0.83), smoothstep(0.0, 0.3, q.y));
+}
+
+vec3 barkAlbedo(vec3 p, vec3 n) {
+  float grain = noise(vec2(atan(n.z, n.x) * 9.0, p.y * 1.5));
+  vec3 bark = mix(vec3(0.13, 0.11, 0.09), vec3(0.27, 0.24, 0.2), grain);
+  float moss = smoothstep(0.55, 0.2, p.y + 0.4 * noise(p.xz * 3.0 + p.y)) * smoothstep(-0.2, 0.4, dot(n.xz, -SUN.xz));
+  return mix(bark, vec3(0.22, 0.3, 0.1), moss);
+}
+
+// Fallen leaves lying over each other; the top leaf at a point wins. Returns colour.
+vec3 leafLitter(vec2 xz) {
+  vec2 g = xz * 5.0;
+  vec2 i = floor(g);
+  vec3 col = vec3(0.17, 0.11, 0.06);
+  float top = -1.0;
+  for (int y = -1; y <= 1; y++)
+  for (int x = -1; x <= 1; x++) {
+    vec2 cell = i + vec2(x, y);
+    float layer = hash(vec3(cell, 1.0));
+    if (layer < top) continue;
+    vec2 d = rotation(hash(vec3(cell, 2.0)) * 6.283) * (g - cell - vec2(hash(vec3(cell, 3.0)), hash(vec3(cell, 4.0))));
+    float shape = length(d / vec2(0.85, 0.38 * (1.0 - 0.6 * d.x * d.x)));
+    if (shape > 1.0) continue;
+    top = layer;
+    float kind = hash(vec3(cell, 5.0));
+    vec3 leaf = kind < 0.4 ? vec3(0.46, 0.29, 0.12) : kind < 0.8 ? vec3(0.3, 0.17, 0.08) : vec3(0.42, 0.36, 0.16);
+    float vein = smoothstep(0.03, 0.0, abs(d.y)) * 0.15;
+    col = leaf * (0.65 + 0.35 * smoothstep(1.0, 0.6, shape) + vein);
+  }
+  return col;
+}
+
+// Leaves up close, fading with distance into their average under drifts of moss.
+vec3 groundAlbedo(vec2 xz, float dist) {
+  vec3 litter = mix(leafLitter(xz), vec3(0.25, 0.16, 0.08), smoothstep(3.0, 9.0, dist));
+  float moss = smoothstep(0.55, 0.75, noise(xz * 0.7 + 3.0) * 0.7 + noise(xz * 3.0) * 0.3);
+  return mix(litter, vec3(0.2, 0.27, 0.1) * (0.8 + 0.3 * noise(xz * 20.0)), moss);
+}
+
+vec3 groundNormal(vec2 xz) {
+  return normalize(vec3(noise(xz * 3.0) - 0.5, 3.0, noise(xz * 3.0 + 7.0) - 0.5));
+}
+
+// How much sun reaches a point past the trunks. They rise into the canopy, so only the
+// sun's direction across the ground matters: walk the cells it crosses.
+float sunThroughTrunks(vec2 o, vec2 dir) {
+  vec2 cell = floor(o / CELL);
+  vec2 stepDir = sign(dir);
+  vec2 tDelta = CELL / abs(dir);
+  vec2 tNext = ((cell + max(stepDir, 0.0)) * CELL - o) / dir;
+  float light = 1.0;
+  for (int i = 0; i < 6; i++) {
+    float radius = trunkRadius(cell);
+    if (radius > 0.0) {
+      vec2 d = o - cellCentre(cell);
+      float along = dot(d, dir);
+      float miss = length(d - dir * along);
+      float blur = 0.05 - 0.04 * along;       // penumbra widens away from the trunk
+      if (along < 0.0) light = min(light, smoothstep(radius - blur, radius + blur, miss));
+    }
+    vec2 pick = step(tNext, tNext.yx);
+    cell += pick * stepDir;
+    tNext += pick * tDelta;
+  }
+  return light;
+}
+
+// Sunlight scattered by the haze where it falls between the trunks.
+float shafts(vec3 ro, vec3 rd, float dist, vec2 sunDir) {
+  float len = min(dist, 14.0);
+  float jitter = hash(vec3(gl_FragCoord.xy, fract(uTime)));
+  float sum = 0.0;
+  for (int i = 0; i < 8; i++) {
+    float s = len * (float(i) + jitter) / 8.0;
+    sum += sunThroughTrunks((ro + rd * s).xz, sunDir);
+  }
+  return sum / 8.0 * (1.0 - exp(-len * 0.08));
+}
+
+// Haze lit by the low sun.
+vec3 haze(vec3 rd, vec3 sun) {
+  float glow = max(dot(rd, sun), 0.0);
+  return HAZE + SUNLIGHT * (0.15 * pow(glow, 3.0) + 0.6 * pow(glow, 24.0));
+}
+
+vec3 background(vec3 rd, vec3 sun) {
+  vec3 col = haze(rd, sun);
+  float leaves = noise(rd.xz / max(rd.y, 0.05) * 3.0) * 0.5 + noise(rd.xz / max(rd.y, 0.05) * 9.0) * 0.5;
+  return mix(col, vec3(0.1, 0.14, 0.1) * (0.6 + 0.8 * leaves), smoothstep(0.1, 0.6, rd.y) * 0.85);
+}
+
+float pathX(float z) {
+  return 0.16 * sin(z * 6.2831853 * 5.0 / (LOOP * CELL));
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / min(uResolution.x, uResolution.y);
+  float z = -mod(uTime * SPEED, LOOP * CELL);
+  vec3 ro = vec3(pathX(z), 0.42 + 0.03 * sin(uTime * 0.37), z);
+  float yaw = atan(pathX(z - 1.0) - ro.x, 1.0) * 0.6 + 0.1 * sin(uTime * 0.09);
+  vec3 fw = normalize(vec3(sin(yaw), -0.02, -cos(yaw)));
+  vec3 rt = normalize(cross(fw, vec3(0, 1, 0)));
+  vec3 up = cross(rt, fw);
+  vec3 rd = normalize(uv.x * rt + uv.y * up + FOCAL * fw);
+  vec3 sun = normalize(SUN);
+
+  float far = rd.y < 0.0 ? min(-ro.y / rd.y, 30.0) : 30.0;
+  float t = 0.0;
+  vec2 m;
+  for (int i = 0; i < 100; i++) {
+    m = map(ro + rd * t);
+    if (m.x < 0.0008 * t || t > far) break;
+    t += m.x;
+  }
+  // Rays that graze a trunk can run out of steps; they are close enough to count as hits.
+  vec2 hit = t < far && m.x < 0.02 ? vec2(t, m.y) : far < 30.0 ? vec2(far, 5.0) : vec2(-1.0);
+
+  vec3 col = background(rd, sun);
+  if (hit.x > 0.0) {
+    vec3 p = ro + rd * hit.x;
+    vec3 n = hit.y > 4.5 ? groundNormal(p.xz) : normalAt(p);
+    map(p);
+    // Marched shadows band where the low sun grazes a trunk; trunks take the exact answer.
+    float shadow = hit.y == 4.0 ? sunThroughTrunks(p.xz, normalize(sun.xz)) : softShadow(p + n * 0.01, sun);
+    float ao = occlusion(p, n);
+    vec3 albedo = hit.y < 3.5 ? mushroomAlbedo(gLocal, n, hit.y)
+                : hit.y < 4.5 ? barkAlbedo(p, n) : groundAlbedo(p.xz, hit.x);
+    float diff = clamp((dot(n, sun) + 0.15) / 1.15, 0.0, 1.0) * shadow;
+    float bounce = 0.5 - 0.5 * n.y;
+    vec3 lit = albedo * (SUNLIGHT * diff * 2.2 + (SHADE * (0.7 + 0.3 * n.y) + vec3(0.25, 0.18, 0.1) * bounce) * ao);
+    vec3 h = normalize(sun - rd);
+    float gloss = hit.y < 0.5 ? 0.3 : hit.y > 4.5 ? 0.25 : 0.06;
+    lit += SUNLIGHT * pow(max(dot(n, h), 0.0), 30.0) * shadow * gloss;
+    // Backlit cap rims let some red light through.
+    if (hit.y < 0.5) lit += vec3(0.6, 0.12, 0.03) * pow(max(dot(rd, sun), 0.0), 2.0) * 0.5 * smoothstep(0.35, 0.56, length(gLocal.xz));
+    float fog = 1.0 - exp(-hit.x * 0.06);
+    col = mix(lit, haze(rd, sun), fog);
+  }
+  float phase = 0.25 + 1.2 * pow(max(dot(rd, sun), 0.0), 6.0);
+  col += SUNLIGHT * shafts(ro, rd, hit.x > 0.0 ? hit.x : 30.0, normalize(sun.xz)) * phase * 0.28;
+
+  col *= 1.0 - 0.3 * dot(uv, uv);
+  col = pow(col, vec3(0.92));
+  col += (hash(vec3(gl_FragCoord.xy, uTime)) - 0.5) * 0.012;
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+gl.linkProgram(program);
+gl.useProgram(program);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const position = gl.getAttribLocation(program, 'position');
+gl.enableVertexAttribArray(position);
+gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+
+const uniform = (name) => gl.getUniformLocation(program, name);
+const uResolution = uniform('uResolution');
+const uTime = uniform('uTime');
+
+function frame(ms) {
+  // Every pixel marches through four cells of the forest; 1.5 keeps that affordable on a laptop.
+  const dpr = Math.min(devicePixelRatio, 1.5);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    gl.viewport(0, 0, w, h);
+  }
+  gl.uniform2f(uResolution, w, h);
+  gl.uniform1f(uTime, ms / 1000);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

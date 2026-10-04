@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ferrofluid</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #b4b1ab; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+
+const vertex = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+// A shallow mushroom-shaped pool of ferrofluid on a matte plate, seen from
+// above. The fluid is a height field: a meniscus-edged layer plus a hexagonal
+// field of Rosensweig spikes whose height follows the magnet's strength.
+const fragment = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform float uTime;
+uniform vec2 uMagnet;
+uniform float uStrength;
+out vec4 outColor;
+
+const float SPACING = 0.052;
+const float SPIKE_RADIUS = 0.026;
+const float TOP = 0.28;
+const float TILT = 0.85;
+const vec3 KEY = vec3(-0.24, 0.8, -0.55);
+
+float sdEllipse(vec2 p, vec2 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+vec2 mushroom2D(vec2 p) {
+  p.x -= 0.05 * p.y * p.y;
+  float r = abs(p.x);
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43);
+  float ring = max(r - 0.096 - (0.66 - p.y) * 0.32, abs(p.y - 0.605) - 0.05);
+  float under = 0.82 + 0.02 * (1.0 - min(r * r / 0.3125, 1.0));
+  float cap = max(sdEllipse(p - vec2(0.0, 0.8), vec2(0.56, 0.31)), under - p.y);
+  float gills = max(r - 0.55, max(p.y - under, 0.8 + 0.015 * (1.0 - min(r * r / 0.27, 1.0)) - p.y));
+  stem = max(stem, -min(cap, gills));
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  if (stem < res.x) res = vec2(stem, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+
+// The plate's xz plane holds the profile with the cap away from the camera,
+// stretched in depth so the oblique camera sees it in true proportion.
+float pool(vec2 xz) {
+  return mushroom2D(vec2(xz.x + 0.03, 0.56 - xz.y * cos(TILT))).x;
+}
+
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+vec2 nearestSpike(vec2 xz) {
+  vec2 p = xz / SPACING;
+  vec2 s = vec2(1.0, 1.7320508);
+  vec2 a = mod(p, s) - 0.5 * s;
+  vec2 b = mod(p - 0.5 * s, s) - 0.5 * s;
+  return (p - (dot(a, a) < dot(b, b) ? a : b)) * SPACING;
+}
+
+// Concave flanks and a slightly rounded tip, normalised to about 1 at the apex.
+float spikeProfile(float r) {
+  return pow(max(1.0 - sqrt(r * r + 6e-5) / SPIKE_RADIUS, 0.0), 1.7);
+}
+
+// Spikes follow the field lines, so a spike's apex sits shifted towards the
+// magnet in proportion to its height: a sheared cone. Two fixed-point passes
+// solve for the height fraction under that shear.
+float spike(vec2 xz, vec2 centre, vec2 lean, float depth) {
+  float field = uStrength * (0.6 + 1.3 * exp(-dot(centre - uMagnet, centre - uMagnet) / 0.07));
+  // Below a critical field the surface stays flat (the Rosensweig threshold).
+  float height = 0.16 * max(field - 0.4, 0.0) * depth;
+  height *= 0.9 + 0.2 * hash(centre);
+  float f = spikeProfile(length(xz - centre));
+  f = spikeProfile(length(xz - centre - lean * f));
+  f = spikeProfile(length(xz - centre - lean * f));
+  return height * f;
+}
+
+// Returns surface height and how far up a spike the point is.
+vec2 fluid(vec2 xz) {
+  float d = pool(xz);
+  if (d > 0.0) return vec2(0.0);
+  float layer = 0.026 * sqrt(clamp(-d / 0.022, 0.0, 1.0));
+  vec2 toMagnet = uMagnet - xz;
+  vec2 lean = toMagnet * 0.13 * exp(-dot(toMagnet, toMagnet) / 0.25) * uStrength;
+  float depth = smoothstep(0.0, -0.06, d);
+  float rise = max(spike(xz, nearestSpike(xz), lean, depth), spike(xz, nearestSpike(xz - lean * 0.6), lean, depth));
+  return vec2(layer + rise, clamp(rise / 0.08, 0.0, 1.0));
+}
+
+float box(vec2 p, vec2 size, float soft) {
+  vec2 q = abs(p) - size;
+  return smoothstep(soft, -soft, max(q.x, q.y));
+}
+
+// A dark studio of softboxes, placed by azimuth (0 faces away from the camera)
+// and elevation. The steep spike flanks only mirror lights low around the
+// pool: a key behind the camera, strips to either side, and a panel beyond
+// the plate. Below the horizon the flanks
+// mostly see neighbouring fluid, which is black. The panel is where the flat
+// fluid mirrors, so spikes stand in silhouette against its sheen.
+vec3 studio(vec3 dir) {
+  if (dir.y < 0.0) return vec3(0.03);
+  vec2 sky = vec2(atan(dir.x, -dir.z), asin(dir.y));
+  vec3 col = vec3(0.012) + vec3(0.12) * smoothstep(0.2, 0.0, sky.y);
+  col += vec3(1.0, 0.97, 0.92) * 20.0 * box(vec2(abs(sky.x) - 3.14159, sky.y - 0.5), vec2(0.4, 0.22), 0.08);
+  col += vec3(1.0, 0.96, 0.9) * 12.0 * box(sky - vec2(-1.6, 0.4), vec2(0.12, 0.3), 0.05);
+  col += vec3(0.9, 0.95, 1.0) * 8.0 * box(sky - vec2(1.4, 0.35), vec2(0.06, 0.25), 0.03);
+  col += vec3(1.0, 0.98, 0.95) * 6.0 * box(sky - vec2(0.0, 0.64), vec2(0.8, 0.03), 0.1);
+  return col;
+}
+
+vec3 plate(vec2 xz) {
+  float d = pool(xz);
+  vec2 shadowOffset = KEY.xz / KEY.y * 0.05;
+  float shadow = 1.0 - 0.4 * smoothstep(0.03, -0.03, pool(xz - shadowOffset));
+  float contact = 1.0 - 0.35 * exp(-max(d, 0.0) / 0.012);
+  float light = 0.25 + 0.75 * normalize(KEY).y;
+  float falloff = 1.0 - 0.18 * dot(xz - vec2(-0.2, -0.4), xz - vec2(-0.2, -0.4));
+  return vec3(0.56, 0.545, 0.52) * light * shadow * contact * falloff;
+}
+
+vec3 normalAt(vec2 xz) {
+  float h = fluid(xz).x;
+  const float e = 0.0012;
+  float hx = fluid(xz + vec2(e, 0.0)).x;
+  float hz = fluid(xz + vec2(0.0, e)).x;
+  return normalize(vec3(h - hx, e, h - hz));
+}
+
+vec3 shadeFluid(vec3 pos, vec3 rd, float rise) {
+  vec3 n = normalAt(pos.xz);
+  float fresnel = 0.05 + 0.95 * pow(1.0 - max(dot(n, -rd), 0.0), 5.0);
+  // Low on the flanks the reflection mostly sees neighbouring spikes, which are black.
+  float open = mix(0.6, 1.0, rise);
+  vec3 base = vec3(0.004) * (0.4 + max(dot(n, normalize(KEY)), 0.0));
+  return base + fresnel * studio(reflect(rd, n)) * open;
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / min(uResolution.x, uResolution.y);
+  vec3 forward = vec3(0.0, -cos(TILT), -sin(TILT));
+  vec3 eye = -forward * 7.0;
+  vec3 right = vec3(1.0, 0.0, 0.0);
+  vec3 up = cross(right, forward);
+  vec3 rd = normalize(uv.x * right + uv.y * up + 4.65 * forward);
+
+  float tTop = (eye.y - TOP) / -rd.y;
+  float tGround = eye.y / -rd.y;
+  vec3 ground = eye + rd * tGround;
+  vec3 col = plate(ground.xz);
+
+  // The profile distance never exceeds the true distance on the plate, so a
+  // ray whose path through the fluid's height range stays clear of it can skip.
+  vec3 entry = eye + rd * tTop;
+  vec2 middle = 0.5 * (entry.xz + ground.xz);
+  if (pool(middle) < 0.5 * length(ground.xz - entry.xz)) {
+    const int STEPS = 56;
+    float dt = (tGround - tTop) / float(STEPS);
+    float t = tTop;
+    bool hit = false;
+    for (int i = 0; i < STEPS; i++) {
+      vec3 p = eye + rd * (t + dt);
+      float h = fluid(p.xz).x;
+      if (h > max(p.y, 0.0)) { hit = true; break; }
+      t += dt;
+    }
+    if (hit) {
+      float lo = t, hi = t + dt;
+      for (int i = 0; i < 6; i++) {
+        float mid = 0.5 * (lo + hi);
+        vec3 p = eye + rd * mid;
+        if (p.y < fluid(p.xz).x) hi = mid; else lo = mid;
+      }
+      vec3 p = eye + rd * hi;
+      col = shadeFluid(p, rd, fluid(p.xz).y);
+    }
+  }
+
+  vec2 q = gl_FragCoord.xy / uResolution - 0.5;
+  col *= 1.0 - 0.35 * dot(q, q);
+  col = pow(col, vec3(1.0 / 2.2));
+  col += (hash(gl_FragCoord.xy + fract(uTime)) - 0.5) * 0.01;
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+gl.linkProgram(program);
+gl.useProgram(program);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const position = gl.getAttribLocation(program, 'position');
+gl.enableVertexAttribArray(position);
+gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+
+const uResolution = gl.getUniformLocation(program, 'uResolution');
+const uTime = gl.getUniformLocation(program, 'uTime');
+const uMagnet = gl.getUniformLocation(program, 'uMagnet');
+const uStrength = gl.getUniformLocation(program, 'uStrength');
+
+// The magnet wanders over the pool and is periodically drawn away, letting
+// the spikes sink back into a glossy, flat pool before they rise again.
+function magnet(t) {
+  const strength = 0.12 + 0.88 * (0.5 - 0.5 * Math.cos(t * 0.3)) ** 0.6;
+  return [0.3 * Math.sin(t * 0.23), 0.4 * Math.sin(t * 0.17 + 1.0) - 0.07, strength];
+}
+
+function frame(ms) {
+  const t = ms / 1000;
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    gl.viewport(0, 0, w, h);
+  }
+  const [x, z, strength] = magnet(t);
+  gl.uniform2f(uResolution, w, h);
+  gl.uniform1f(uTime, t);
+  gl.uniform2f(uMagnet, x, z);
+  gl.uniform1f(uStrength, strength);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

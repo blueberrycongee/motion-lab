@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stack</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: radial-gradient(75% 65% at 50% 42%, #5e4f41, #3a3029 58%, #1f1915); }
+  .stack { position: absolute; left: 50%; top: 0; transform-style: preserve-3d; }
+  .stack div { position: absolute; }
+  .slice { transform-style: preserve-3d; }
+  .top, .ply, .light { border-radius: 50%; }
+  .light { inset: 0; }
+</style>
+</head>
+<body>
+<div class="stack"></div>
+<script type="module">
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const clamp01 = (v) => Math.min(Math.max(v, 0), 1);
+const ease = (v) => v * v * (3 - 2 * v);
+const mix = (a, b, k) => a + (b - a) * k;
+const normalize = (v) => v.map((c) => c / Math.hypot(...v));
+const hash = (n) => {
+  const s = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return s - Math.floor(s);
+};
+const tint = (color, k) => `rgb(${color.map((c) => Math.round(Math.min(c * k, 255))).join(' ')})`;
+const blend = (a, b, k) => a.map((c, i) => mix(c, b[i], k));
+
+// CSS axes: y points down, z towards the viewer; the light comes from above, left and front.
+const LIGHT = normalize([-0.5, -0.6, 0.62]);
+const HEIGHT = 1.13;
+const SLICES = 36;
+const THICK = HEIGHT / SLICES;
+// Plies through one sheet of plywood, as brightness factors; the dark one is the glue line.
+const PLIES = [1, 0.9, 0.58, 0.9, 0.8];
+const GAP = 0.026;
+const CYCLE = 16;
+const TURN_RATE = calm ? 0.12 : 0.35;
+
+const BIRCH = [222, 196, 150];
+const SCORCH = [74, 46, 26];
+const PAINT = {
+  rim: [184, 50, 26], crown: [110, 19, 11], gills: [210, 198, 173], ring: [221, 213, 194], stem: [232, 226, 210],
+};
+
+// ---- The canonical mushroom, as the radius of each horizontal slice ----
+
+function stemRadius(h) {
+  return 0.085 + 0.025 * (1 - h / 0.86) + 0.065 * Math.exp(-9 * h);
+}
+
+function profile(h) {
+  if (h >= 0.82) {
+    const k = (h - 0.82) / 0.31;
+    return { radius: 0.56 * Math.sqrt(Math.max(1 - k * k, 0)), paint: blend(PAINT.rim, PAINT.crown, k), centre: 0.032, cap: true };
+  }
+  if (h >= 0.8) return { radius: 0.54, paint: PAINT.gills, centre: 0.032 };
+  const centre = 0.05 * h * h;
+  const ring = h >= 0.555 && h <= 0.66 ? 0.096 + (0.66 - h) * 0.32 : 0;
+  if (ring > stemRadius(h)) return { radius: ring, paint: PAINT.ring, centre };
+  return { radius: stemRadius(h), paint: PAINT.stem, centre };
+}
+
+// ---- Faces ----
+
+// Each ply copy is a flat disc that never turns, so its rim can carry fixed Lambert shading. Only the front
+// half of a rim is ever visible, where the outward normal at x across the disc is (x, 0, sqrt(1 - x^2)).
+function rimShading(color) {
+  const stops = [];
+  for (let step = 0; step <= 12; step++) {
+    const x = step / 6 - 1;
+    const facing = Math.max(x * LIGHT[0] + Math.sqrt(1 - x * x) * LIGHT[2], 0);
+    stops.push(`${tint(color, 0.45 + 0.7 * facing)} ${((step / 12) * 100).toFixed(1)}%`);
+  }
+  return `linear-gradient(to right, ${stops.join(', ')})`;
+}
+
+// Paint covers only the ring left exposed by the slice above; inside it the bare birch shows once the stack opens.
+function topFace(slice, index, unit) {
+  const exposed = Math.min(slice.above / slice.radius, 1) * 100;
+  const layers = slice.cap ? warts(slice, index, unit) : [];
+  const bare = exposed > 0 ? `transparent ${exposed.toFixed(1)}%, ` : '';
+  layers.push(`radial-gradient(circle closest-side, ${bare}${tint(slice.paint, 1)} ${Math.min(exposed + 0.6, 100).toFixed(1)}% 97%, ${tint(SCORCH, 1)} 99.5%)`);
+  const period = 3 + 3 * hash(index);
+  layers.push(`repeating-linear-gradient(${Math.round(360 * hash(index + 0.4))}deg, ${tint(BIRCH, 1)} 0 ${period.toFixed(1)}px, ${tint(BIRCH, 0.92)} ${(period + 1.2).toFixed(1)}px, ${tint(BIRCH, 1)} ${(period + 2.6).toFixed(1)}px)`);
+  return layers.join(', ');
+}
+
+function warts(slice, index, unit) {
+  const inner = slice.above / slice.radius;
+  const middle = (inner + 1) / 2;
+  const count = Math.floor(slice.radius * middle * 7);
+  const size = Math.min(0.024 * unit, ((1 - inner) / 2) * slice.radius * unit * 0.8);
+  return Array.from({ length: count }, (_, k) => {
+    const angle = index * 2.4 + (k * 2 * Math.PI) / count;
+    const x = 50 + 50 * middle * Math.cos(angle), y = 50 + 50 * middle * Math.sin(angle);
+    return `radial-gradient(circle at ${x.toFixed(1)}% ${y.toFixed(1)}%, #efe7d6 ${size.toFixed(1)}px, transparent ${(size + 1).toFixed(1)}px)`;
+  });
+}
+
+// ---- Build ----
+
+const stack = document.querySelector('.stack');
+let unit = 1, slices = [];
+
+function disc(radius, transform, background) {
+  const element = document.createElement('div');
+  element.style.cssText = `left: ${-radius}px; top: ${-radius}px; width: ${2 * radius}px; height: ${2 * radius}px; transform: ${transform}; background: ${background};`;
+  return element;
+}
+
+function contactShadow() {
+  const shadow = disc(0.75 * unit, 'rotateX(90deg) translate(14%, -6%) scale(1, 0.75)',
+    'radial-gradient(closest-side, rgb(12 8 5 / 0.6), rgb(12 8 5 / 0.25) 55%, transparent)');
+  stack.append(shadow);
+}
+
+function buildSlice(index) {
+  const h = index * THICK;
+  const slice = { ...profile(h + THICK / 2), h, index };
+  slice.above = index < SLICES - 1 ? profile(h + 1.5 * THICK).radius : 0;
+  const radius = slice.radius * unit;
+  const element = document.createElement('div');
+  element.className = 'slice';
+  const wood = blend(slice.paint, BIRCH, 0.4);
+  PLIES.forEach((brightness, k) => {
+    const ply = disc(radius, `translateY(${((k + 0.5) * THICK * unit) / PLIES.length}px) rotateX(90deg)`, rimShading(blend(wood, SCORCH, 1 - brightness)));
+    ply.className = 'ply';
+    element.append(ply);
+  });
+  const top = disc(radius, 'rotateX(90deg)', topFace(slice, index, unit));
+  top.className = 'top';
+  const light = document.createElement('div');
+  light.className = 'light';
+  top.append(light);
+  element.append(top);
+  stack.append(element);
+  return { ...slice, element, top, light };
+}
+
+function build() {
+  unit = Math.min(innerHeight * 0.6, innerWidth * 0.8);
+  document.body.style.perspective = `${3.5 * innerHeight}px`;
+  stack.replaceChildren();
+  contactShadow();
+  slices = Array.from({ length: SLICES }, (_, index) => buildSlice(index));
+}
+addEventListener('resize', build);
+build();
+
+// ---- Choreography ----
+
+// Gaps open from the top down and close from the bottom up, so the cap leads out and settles last.
+function opening(t, index) {
+  const time = t % CYCLE;
+  const out = ease(clamp01((time - 3 - 0.045 * (SLICES - 1 - index)) / 1.8));
+  const back = ease(clamp01((time - 10 - 0.04 * index) / 1.8));
+  return out - back;
+}
+
+function gaps(t) {
+  return slices.map((slice) => {
+    const open = opening(t, slice.index);
+    // While open, a slow ripple travels up the stack.
+    const ripple = calm ? 0 : 0.35 * Math.sin(2 * Math.PI * (t * 0.42 - slice.index / 12));
+    return { open, gap: GAP * open * (1 + ripple * open) };
+  });
+}
+
+// Anticipation: the stack winds back a little before twisting open into a spiral.
+function twist(t, index, open) {
+  const time = t % CYCLE;
+  const windUp = calm ? 0 : -0.1 * Math.sin(Math.PI * clamp01((time - 2.3) / 1.2)) * (1 - open);
+  return (index / SLICES) * ((calm ? 0.35 : 0.9) * open + windUp);
+}
+
+function topLight(tiltX, tiltZ) {
+  const normal = [Math.cos(tiltX) * Math.sin(tiltZ), -Math.cos(tiltX) * Math.cos(tiltZ), -Math.sin(tiltX)];
+  const change = normal[0] * LIGHT[0] + normal[1] * LIGHT[1] + normal[2] * LIGHT[2] + LIGHT[1];
+  return change > 0 ? `rgb(255 246 226 / ${(change * 1.6).toFixed(3)})` : `rgb(24 14 6 / ${(-change * 2.2).toFixed(3)})`;
+}
+
+function frame(now) {
+  const t = now / 1000;
+  const turn = t * TURN_RATE;
+  const state = gaps(t);
+  const spread = Math.max(...state.map(({ open }) => open));
+  let lift = 0;
+  slices.forEach((slice, i) => {
+    const { open } = state[i];
+    const wobble = calm ? 0 : open * 0.07;
+    const tiltX = wobble * Math.sin(t * 1.1 - i * 0.25), tiltZ = wobble * 0.7 * Math.cos(t * 0.9 - i * 0.3);
+    const x = slice.centre * unit * Math.cos(turn), z = -slice.centre * unit * Math.sin(turn);
+    const y = -(slice.h + THICK + lift) * unit;
+    slice.element.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, ${z.toFixed(2)}px) rotateZ(${tiltZ.toFixed(4)}rad) rotateX(${tiltX.toFixed(4)}rad)`;
+    slice.top.style.transform = `rotateX(90deg) rotateZ(${(twist(t, i, open) - turn).toFixed(4)}rad)`;
+    slice.light.style.background = topLight(tiltX, tiltZ);
+    lift += state[i].gap;
+  });
+  placeCamera(spread, lift);
+  requestAnimationFrame(frame);
+}
+
+// The camera pulls back and looks further down while the slices are apart.
+function placeCamera(spread, lift) {
+  const opened = ease(spread);
+  const tall = HEIGHT + lift;
+  const scale = mix(1, Math.min(1, (0.76 * innerHeight) / ((HEIGHT + GAP * SLICES) * unit)), opened);
+  const pitch = mix(-0.42, -0.55, opened);
+  const floor = innerHeight / 2 + 0.5 * tall * unit * scale * Math.cos(pitch) + 0.03 * innerHeight;
+  stack.style.transform = `translate3d(0, ${floor.toFixed(2)}px, 0) rotateX(${pitch.toFixed(4)}rad) scale3d(${scale}, ${scale}, ${scale})`;
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

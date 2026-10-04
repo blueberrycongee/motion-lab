@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Underwater</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1d5a5f; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+
+const vertex = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const fragment = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform float uTime;
+out vec4 outColor;
+
+const float FOCAL = 2.0;
+const float SURFACE = 5.0;                  // height of the water surface above the sand
+const vec3 SUN = vec3(0.22, 1.0, 0.3);      // towards the sun, refracted steeply under water
+const vec3 SUNLIGHT = vec3(1.7, 1.6, 1.38);
+// Water absorbs red first, then green: light is tinted by the length of water it crosses.
+const vec3 ABSORB = vec3(0.09, 0.04, 0.035);
+const vec3 DEEP = vec3(0.02, 0.09, 0.12);
+const vec3 SHALLOW = vec3(0.1, 0.34, 0.38);
+const vec2 VENTS[2] = vec2[2](vec2(-0.8, 0.45), vec2(0.95, -0.8));  // where bubbles rise from
+
+vec3 gLocal;       // the hit point in the mushroom's frame, for shading
+
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(vec3(i, 0.0)), hash(vec3(i + vec2(1, 0), 0.0)), f.x),
+             mix(hash(vec3(i + vec2(0, 1), 0.0)), hash(vec3(i + vec2(1, 1), 0.0)), f.x), f.y);
+}
+
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom: ground at y = 0, cap top near y = 1.11, cap about 1.12 wide.
+// Returns distance and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom(vec3 p) {
+  p.x -= 0.05 * p.y * p.y;                       // a slight lean
+  float r = length(p.xz);
+
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43) * 0.8;
+
+  float frill = 0.008 * sin(atan(p.z, p.x) * 9.0);
+  float skirt = abs(r - (0.096 + (0.66 - p.y) * 0.32 + frill * smoothstep(0.64, 0.56, p.y))) - 0.009;
+  float ring = max(skirt, abs(p.y - 0.605) - 0.05) * 0.7;
+
+  vec3 c = p - vec3(0.0, 0.8, 0.0);
+  float dome = sdEllipsoid(c, vec3(0.56, 0.31, 0.56));
+  dome += 0.008 * sin(c.x * 11.0 + 1.3) * sin(c.z * 9.0) * sin(c.y * 7.0 + c.x * 5.0);
+  float under = 0.82 + 0.08 * (1.0 - min(r * r / 0.31, 1.0));
+  float cap = max(dome, under - p.y);
+  float gills = max(dome + 0.02, max(p.y - under - 0.004, under - 0.04 - p.y));
+
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  float body = smin(stem, max(cap, gills), 0.03);
+  if (body < res.x - 0.001) res = vec2(body, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+
+// The current sways the mushroom gently from the base.
+vec3 swayed(vec3 p) {
+  p.x -= 0.035 * sin(uTime * 0.7) * p.y * p.y;
+  p.z -= 0.02 * sin(uTime * 0.53 + 1.0) * p.y * p.y;
+  return p;
+}
+
+float sandHeight(vec2 xz) {
+  float ripples = sin(dot(xz, vec2(0.9, 0.44)) * 7.0 + 2.0 * noise(xz * 0.7));
+  return 0.018 * ripples + 0.12 * noise(xz * 0.35) - 0.06;
+}
+
+// Part 4 is the sand.
+vec2 map(vec3 p) {
+  vec2 res = vec2(0.8 * (p.y - sandHeight(p.xz)), 4.0);
+  vec3 q = swayed(p);
+  float bound = length(q - vec3(0.03, 0.55, 0.0)) - 0.8;
+  if (bound < res.x) {
+    vec2 m = mushroom(q);
+    if (m.x < res.x) { res = m; gLocal = q; }
+  }
+  return res;
+}
+
+vec3 normalAt(vec3 p) {
+  vec2 e = vec2(0.0015, 0.0);
+  return normalize(vec3(map(p + e.xyy).x - map(p - e.xyy).x,
+                        map(p + e.yxy).x - map(p - e.yxy).x,
+                        map(p + e.yyx).x - map(p - e.yyx).x));
+}
+
+float softShadow(vec3 ro, vec3 rd) {
+  float res = 1.0, t = 0.02;
+  for (int i = 0; i < 32; i++) {
+    float h = mushroom(swayed(ro + rd * t)).x;
+    res = min(res, 6.0 * h / t);
+    t += clamp(h, 0.02, 0.25);
+    if (res < 0.002 || t > 2.5) break;
+  }
+  return clamp(res, 0.0, 1.0);
+}
+
+float occlusion(vec3 p, vec3 n) {
+  float o = 0.0, w = 1.0;
+  for (int i = 1; i <= 4; i++) {
+    float h = 0.02 + 0.05 * float(i);
+    o += (h - map(p + n * h).x) * w;
+    w *= 0.7;
+  }
+  return clamp(1.0 - 2.5 * o, 0.0, 1.0);
+}
+
+// Where the sunlight reaching p entered the water.
+vec2 entry(vec3 p) {
+  vec3 sun = normalize(SUN);
+  return p.xz + sun.xz / sun.y * (SURFACE - p.y);
+}
+
+// The bright web the waves focus onto the floor, layered at two scales to hide its tiling.
+// The classic iterated-warp caustic; it needs p far from the origin to keep its lines thin.
+float causticLayer(vec2 p, float time) {
+  p = mod(p, 6.2831853) - 250.0;
+  vec2 i = p;
+  float c = 1.0;
+  for (int n = 0; n < 4; n++) {
+    float t = time * (1.0 - 3.5 / float(n + 1));
+    i = p + vec2(cos(t - i.x) + sin(t + i.y), sin(t - i.y) + cos(t + i.x));
+    c += 1.0 / length(vec2(p.x / (sin(i.x + t) / 0.005), p.y / (cos(i.y + t) / 0.005)));
+  }
+  c = 1.17 - pow(c / 4.0, 1.4);
+  return pow(abs(c), 8.0);
+}
+
+float caustics(vec3 p) {
+  vec2 s = entry(p);
+  float a = causticLayer(s * 2.6 + 2.0, uTime * 0.45);
+  float b = causticLayer(s.yx * 3.3 - 5.0, uTime * 0.38 + 3.0);
+  return min(1.4 * a + 0.9 * b, 2.5);
+}
+
+// The shadow of the cap cast up the light shafts, as a disc held at the cap's height.
+float capShade(vec3 p) {
+  if (p.y > 0.85) return 1.0;
+  vec3 sun = normalize(SUN);
+  vec2 c = p.xz + sun.xz / sun.y * (0.85 - p.y) - vec2(0.04, 0.0);
+  return smoothstep(0.42, 0.62, length(c));
+}
+
+float shafts(vec3 ro, vec3 rd, float len) {
+  float total = 0.0;
+  float jitter = fract(52.98 * fract(dot(gl_FragCoord.xy, vec2(0.0671, 0.00584))));
+  len = min(len, 14.0);
+  for (int i = 0; i < 10; i++) {
+    vec3 p = ro + rd * len * (float(i) + jitter) / 10.0;
+    vec2 s = entry(p);
+    float beams = noise(s * 0.8 + vec2(uTime * 0.12, -uTime * 0.07)) * noise(s * 1.7 - uTime * 0.1);
+    total += beams * beams * capShade(p) * exp(-0.12 * (SURFACE - p.y));
+  }
+  return total / 10.0 * len;
+}
+
+vec3 water(vec3 rd) {
+  vec3 col = mix(DEEP, SHALLOW, smoothstep(-0.35, 0.9, rd.y));
+  return col + SHALLOW * 0.5 * pow(max(dot(rd, normalize(SUN)), 0.0), 6.0);
+}
+
+float warts(vec3 p) {
+  vec3 g = p * 10.0;
+  vec3 i = floor(g), f = fract(g);
+  float d = 1e9;
+  for (int z = -1; z <= 1; z++)
+  for (int y = -1; y <= 1; y++)
+  for (int x = -1; x <= 1; x++) {
+    vec3 o = vec3(x, y, z);
+    vec3 j = o + vec3(hash(i + o), hash(i + o + 7.1), hash(i + o + 3.7));
+    d = min(d, length(j - f) * (0.7 + 0.6 * hash(i + o + 1.3)));
+  }
+  return 1.0 - smoothstep(0.18, 0.26, d);
+}
+
+vec3 mushroomAlbedo(vec3 q, float part) {
+  q.x -= 0.05 * q.y * q.y;
+  float r = length(q.xz);
+  if (part < 0.5) {
+    vec3 cap = mix(vec3(0.5, 0.07, 0.04), vec3(0.78, 0.26, 0.07), smoothstep(0.2, 0.56, r));
+    return mix(cap, vec3(0.86, 0.82, 0.72), warts(q - vec3(0.0, 0.8, 0.0)) * smoothstep(0.85, 0.95, q.y));
+  }
+  if (part < 1.5) return vec3(0.82, 0.77, 0.66) * (0.7 + 0.3 * (0.5 + 0.5 * cos(atan(q.z, q.x) * 70.0)));
+  return mix(vec3(0.72, 0.68, 0.6), vec3(0.93, 0.9, 0.83), smoothstep(0.0, 0.3, q.y));
+}
+
+vec3 sandAlbedo(vec2 xz) {
+  float grain = hash(vec3(floor(xz * 160.0), 1.0));
+  float patches = noise(xz * 1.3);
+  return mix(vec3(0.62, 0.56, 0.42), vec3(0.8, 0.74, 0.58), patches) * (0.88 + 0.2 * grain);
+}
+
+// Rising bubbles: wobbling spheres from two vents. Returns colour and coverage of the nearest one.
+vec4 bubbles(vec3 ro, vec3 rd, float far) {
+  vec4 res = vec4(0.0);
+  float nearest = far;
+  for (int v = 0; v < 2; v++) {
+    for (int i = 0; i < 9; i++) {
+      float k = float(v * 9 + i);
+      float rise = fract(uTime * (0.07 + 0.02 * hash(vec3(k, 2.0, 0.0))) + hash(vec3(k, 3.0, 0.0)));
+      float radius = 0.018 + 0.04 * hash(vec3(k, 4.0, 0.0)) * (0.7 + 0.6 * rise);
+      vec3 c = vec3(VENTS[v].x, rise * 4.5, VENTS[v].y);
+      c.xz += rise * 0.4 * (vec2(hash(vec3(k, 5.0, 0.0)), hash(vec3(k, 6.0, 0.0))) - 0.5);
+      c.xz += 0.03 * vec2(sin(uTime * 5.0 + k * 1.7), cos(uTime * 4.3 + k));
+      vec3 oc = ro - c;
+      float b = dot(oc, rd);
+      float h = b * b - dot(oc, oc) + radius * radius;
+      if (h < 0.0) continue;
+      float t = -b - sqrt(h);
+      if (t < 0.0 || t > nearest) continue;
+      nearest = t;
+      vec3 n = (ro + rd * t - c) / radius;
+      float rim = pow(1.0 - max(dot(n, -rd), 0.0), 2.5);
+      float spark = pow(max(dot(reflect(rd, n), normalize(SUN)), 0.0), 40.0);
+      float fade = smoothstep(0.0, 0.05, rise) * smoothstep(1.0, 0.85, rise);
+      res = vec4(mix(SHALLOW * 1.4, vec3(0.9, 1.0, 1.0), rim) + spark, (0.12 + 0.8 * rim) * fade);
+      res.w *= exp(-0.08 * t);
+    }
+  }
+  return res;
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / min(uResolution.x, uResolution.y);
+
+  float drift = uTime * 0.11;
+  vec3 target = vec3(0.0, 0.58, 0.0);
+  vec3 ro = target + vec3(sin(drift) * 0.45, 0.6 + 0.08 * sin(drift * 1.3), 3.6 + 0.15 * cos(drift));
+  vec3 fw = normalize(target - ro);
+  vec3 rt = normalize(cross(fw, vec3(0, 1, 0)));
+  vec3 up = cross(rt, fw);
+  vec3 rd = normalize(uv.x * rt + uv.y * up + FOCAL * fw);
+
+  float t = 0.0, far = 26.0;
+  vec2 hit = vec2(-1.0);
+  for (int i = 0; i < 100; i++) {
+    vec2 m = map(ro + rd * t);
+    if (m.x < 0.0005 * t || i == 99) { hit = vec2(t, m.y); break; }
+    t += m.x;
+    if (t > far) break;
+  }
+
+  vec3 bg = water(rd);
+  vec3 col = bg;
+  float depth = far;
+  if (hit.x > 0.0) {
+    depth = hit.x;
+    vec3 p = ro + rd * hit.x;
+    vec3 n = normalAt(p);
+    map(p);
+    vec3 local = gLocal;
+    vec3 sun = normalize(SUN);
+    vec3 base = hit.y < 3.5 ? mushroomAlbedo(local, hit.y) : sandAlbedo(p.xz);
+    vec3 light = SUNLIGHT * exp(-ABSORB * (SURFACE - p.y) / sun.y);
+    float shadow = softShadow(p + n * 0.01, sun);
+    float ao = occlusion(p, n);
+    float diff = clamp(dot(n, sun), 0.0, 1.0) * shadow;
+    float focus = caustics(p) * smoothstep(-0.2, 0.6, dot(n, sun));
+    // The red cap reflects little of the blue-green light, so the pattern is lifted on the mushroom to read.
+    vec3 lit = base * light * diff * (0.3 + focus * (hit.y < 3.5 ? 2.0 : 1.0));
+    lit += base * SHALLOW * (1.0 + 0.6 * n.y) * ao;
+    lit += base * vec3(0.7, 0.66, 0.5) * light * 0.12 * max(-n.y, 0.0) * ao;   // light bounced off the sand
+    if (hit.y < 3.5) {
+      lit += base * SHALLOW * 0.5 * pow(1.0 - max(dot(n, -rd), 0.0), 3.0) * ao;
+      lit += light * pow(max(dot(reflect(rd, n), sun), 0.0), 30.0) * shadow * (hit.y < 0.5 ? 0.12 : 0.04);
+    }
+    vec3 transmit = exp(-ABSORB * hit.x);
+    col = mix(water(normalize(vec3(rd.x, 0.0, rd.z))), lit * transmit, exp(-0.11 * hit.x));
+  }
+
+  col += SHALLOW * 0.45 * shafts(ro, rd, depth);
+  vec4 bubble = bubbles(ro, rd, depth);
+  col = mix(col, bubble.rgb, bubble.w);
+
+  col *= 1.0 - 0.3 * dot(uv, uv);
+  col += (hash(vec3(gl_FragCoord.xy, uTime)) - 0.5) * 0.012;
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+gl.linkProgram(program);
+gl.useProgram(program);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const position = gl.getAttribLocation(program, 'position');
+gl.enableVertexAttribArray(position);
+gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+
+const uniform = (name) => gl.getUniformLocation(program, name);
+const uResolution = uniform('uResolution');
+const uTime = uniform('uTime');
+
+function frame(ms) {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    gl.viewport(0, 0, w, h);
+  }
+  gl.uniform2f(uResolution, w, h);
+  gl.uniform1f(uTime, ms / 1000);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

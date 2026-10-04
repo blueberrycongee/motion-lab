@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glow</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #070b0b; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+
+// The scene renders at most about one megapixel: full resolution on ordinary canvases,
+// about one sample per CSS pixel on dense displays. The bloom comes from its mipmaps.
+const PIXEL_BUDGET = 1200 * 900;
+
+const vertex = `#version 300 es
+layout(location = 0) in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const sceneFragment = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform float uTime;
+out vec4 outColor;
+
+const vec3 BOUNDS_CENTER = vec3(0.0, 0.56, 0.0);
+const float BOUNDS_RADIUS = 0.82;
+const vec3 MOON = vec3(-0.68, 0.52, -0.52);
+const vec3 MOON_COLOR = vec3(0.5, 0.62, 0.72);
+const vec3 NIGHT = vec3(0.008, 0.013, 0.015);
+// Fungal luciferin emits near 520 nm, a slightly yellowish green.
+const vec3 GLOW = vec3(0.42, 1.0, 0.3);
+const vec3 FIREFLY = vec3(0.85, 0.95, 0.35);
+const int TRUNKS = 12;
+const int FIREFLIES = 9;
+
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(vec3(i, 0.0)), hash(vec3(i + vec2(1, 0), 0.0)), f.x),
+             mix(hash(vec3(i + vec2(0, 1), 0.0)), hash(vec3(i + vec2(1, 1), 0.0)), f.x), f.y);
+}
+
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 4; i++) {
+    v += a * noise(p);
+    p = p * 2.03 + vec2(1.7, 9.2);
+    a *= 0.5;
+  }
+  return v;
+}
+
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom: ground at y = 0, cap top near y = 1.11, cap about 1.12 wide.
+// Returns distance and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom(vec3 p) {
+  p.x -= 0.05 * p.y * p.y;                       // a slight lean
+  float r = length(p.xz);
+
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43) * 0.8;
+
+  float frill = 0.008 * sin(atan(p.z, p.x) * 9.0);
+  float skirt = abs(r - (0.096 + (0.66 - p.y) * 0.32 + frill * smoothstep(0.64, 0.56, p.y))) - 0.009;
+  float ring = max(skirt, abs(p.y - 0.605) - 0.05) * 0.7;
+
+  vec3 c = p - vec3(0.0, 0.8, 0.0);
+  float dome = sdEllipsoid(c, vec3(0.56, 0.31, 0.56));
+  dome += 0.008 * sin(c.x * 11.0 + 1.3) * sin(c.z * 9.0) * sin(c.y * 7.0 + c.x * 5.0);
+  float under = 0.82 + 0.08 * (1.0 - min(r * r / 0.31, 1.0));
+  float cap = max(dome, under - p.y);
+  float gills = max(dome + 0.02, max(p.y - under - 0.004, under - 0.04 - p.y));
+
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  float body = smin(stem, max(cap, gills), 0.03);
+  if (body < res.x - 0.001) res = vec2(body, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+
+vec3 normalAt(vec3 p) {
+  vec2 e = vec2(0.0015, 0.0);
+  return normalize(vec3(mushroom(p + e.xyy).x - mushroom(p - e.xyy).x,
+                        mushroom(p + e.yxy).x - mushroom(p - e.yxy).x,
+                        mushroom(p + e.yyx).x - mushroom(p - e.yyx).x));
+}
+
+float softShadow(vec3 ro, vec3 rd) {
+  float res = 1.0, t = 0.02;
+  for (int i = 0; i < 32; i++) {
+    float h = mushroom(ro + rd * t).x;
+    res = min(res, 10.0 * h / t);
+    t += clamp(h, 0.02, 0.2);
+    if (res < 0.002 || t > 3.0) break;
+  }
+  return clamp(res, 0.0, 1.0);
+}
+
+float cells(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  float d = 1e9;
+  for (int z = -1; z <= 1; z++)
+  for (int y = -1; y <= 1; y++)
+  for (int x = -1; x <= 1; x++) {
+    vec3 o = vec3(x, y, z);
+    vec3 j = o + vec3(hash(i + o), hash(i + o + 7.1), hash(i + o + 3.7));
+    d = min(d, length(j - f) * (0.7 + 0.6 * hash(i + o + 1.3)));
+  }
+  return d;
+}
+
+// Slow breathing of the glow, as reported for Mycena and Panellus over minutes.
+float breath() {
+  return 0.9 + 0.1 * sin(uTime * 0.4) * sin(uTime * 0.17 + 1.0);
+}
+
+// Light emitted at q (mushroom space): the gills carry most of it,
+// the stem and ring less, the cap skin none.
+float emission(vec3 q, float part) {
+  float r = length(q.xz);
+  if (part < 0.5) return 0.0;
+  if (part < 1.5) {
+    float a = atan(q.z, q.x) * 70.0;
+    float resolved = clamp(1.5 - fwidth(a), 0.0, 1.0);
+    float lamella = 0.5 + 0.5 * cos(a) * resolved;
+    return (0.55 + 0.45 * lamella) * mix(1.0, 0.55, smoothstep(0.3, 0.56, r));
+  }
+  float fibres = 0.92 + 0.08 * sin(atan(q.z, q.x) * 23.0 + q.y * 4.0);
+  if (part < 2.5) return (0.05 + 0.2 * smoothstep(0.1, 0.8, q.y)) * fibres;
+  return 0.25;
+}
+
+vec3 albedo(vec3 q, vec3 n, float part) {
+  float r = length(q.xz);
+  if (part < 0.5) {
+    vec3 cap = mix(vec3(0.42, 0.06, 0.035), vec3(0.70, 0.22, 0.06), smoothstep(0.2, 0.56, r));
+    float wart = 1.0 - smoothstep(0.18, 0.26, cells((q - vec3(0.0, 0.8, 0.0)) * 10.0));
+    return mix(cap, vec3(0.86, 0.82, 0.72), wart * smoothstep(0.0, 0.3, n.y + 0.2));
+  }
+  if (part < 1.5) return vec3(0.82, 0.77, 0.66);
+  return mix(vec3(0.72, 0.68, 0.6), vec3(0.93, 0.9, 0.83), smoothstep(0.0, 0.3, q.y));
+}
+
+// Glow reaching p from the mushroom: the gill disc acts as a downward-facing
+// emitter and the stem as a line source.
+vec3 glowAt(vec3 p, vec3 n) {
+  vec3 toGills = vec3(0.0, 0.84, 0.0) - p;
+  float below = max(toGills.y, 0.0) / length(toGills);
+  float disc = below * max(dot(n, normalize(toGills)), 0.0) * 0.12 / (dot(toGills, toGills) + 0.12);
+  vec3 toStem = vec3(-p.x, clamp(0.5 - p.y, -0.3, 0.3), -p.z);
+  float line = max(dot(n, normalize(toStem)), 0.0) * 0.02 / (dot(toStem.xz, toStem.xz) + 0.02);
+  return GLOW * (disc + line) * breath();
+}
+
+vec3 trunk(int i) {
+  float fi = float(i);
+  float z = -7.0 - fi * 2.8 - 2.0 * hash(vec3(fi, 1.0, 0.0));
+  float x = (hash(vec3(fi, 2.0, 0.0)) - 0.5) * -z * 1.4;
+  return vec3(x, z, 0.22 + 0.4 * hash(vec3(fi, 3.0, 0.0)));
+}
+
+float traceTrunks(vec3 ro, vec3 rd) {
+  float best = 1e9;
+  vec2 d = rd.xz;
+  float a = dot(d, d);
+  for (int i = 0; i < TRUNKS; i++) {
+    vec3 tr = trunk(i);
+    vec2 o = ro.xz - tr.xy;
+    float b = dot(o, d), c = dot(o, o) - tr.z * tr.z;
+    float disc = b * b - a * c;
+    if (disc < 0.0) continue;
+    float t = (-b - sqrt(disc)) / a;
+    if (t > 0.0) best = min(best, t);
+  }
+  return best;
+}
+
+vec2 traceMushroom(vec3 ro, vec3 rd) {
+  vec3 oc = ro - BOUNDS_CENTER;
+  float b = dot(oc, rd);
+  float disc = b * b - dot(oc, oc) + BOUNDS_RADIUS * BOUNDS_RADIUS;
+  if (disc < 0.0) return vec2(1e9, -1.0);
+  float t = max(-b - sqrt(disc), 0.0), tEnd = -b + sqrt(disc);
+  for (int i = 0; i < 100; i++) {
+    vec2 m = mushroom(ro + rd * t);
+    if (m.x < 0.0005 * t) return vec2(t, m.y);
+    t += m.x * 0.9;
+    if (t > tEnd) break;
+  }
+  return vec2(1e9, -1.0);
+}
+
+vec3 shadeMushroom(vec3 p, vec3 rd, float part) {
+  vec3 n = normalAt(p);
+  vec3 q = p;
+  q.x -= 0.05 * q.y * q.y;
+  vec3 base = albedo(q, n, part);
+  float moon = max(dot(n, MOON), 0.0) * softShadow(p + n * 0.004, MOON);
+  vec3 col = base * (MOON_COLOR * moon * 0.5 + NIGHT * (0.5 + 0.5 * n.y));
+  // Glow from the gills spills onto the inner cap margin and the stem.
+  col += base * GLOW * 0.1 * breath() * smoothstep(0.3, 0.8, q.y) * smoothstep(0.86, 0.75, q.y);
+  col += GLOW * emission(q, part) * 0.5 * breath();
+  // Moonlit rim on the wet cap skin.
+  float rim = pow(1.0 - max(dot(n, -rd), 0.0), 4.0);
+  col += MOON_COLOR * rim * max(dot(n, MOON) + 0.3, 0.0) * 0.6;
+  vec3 h = normalize(MOON - rd);
+  if (part < 0.5) col += MOON_COLOR * pow(max(dot(n, h), 0.0), 200.0) * 0.25;
+  return col;
+}
+
+vec3 shadeGround(vec3 p, vec3 rd) {
+  vec2 g = p.xz;
+  float bumps = fbm(g * 6.0);
+  vec3 n = normalize(vec3(fbm(g * 6.0 + vec2(0.05, 0.0)) - bumps, 0.08, fbm(g * 6.0 + vec2(0.0, 0.05)) - bumps));
+  vec3 moss = mix(vec3(0.03, 0.06, 0.02), vec3(0.08, 0.13, 0.04), fbm(g * 14.0));
+  vec3 litter = mix(vec3(0.06, 0.04, 0.025), vec3(0.11, 0.07, 0.04), fbm(g * 3.0));
+  vec3 base = mix(litter, moss, smoothstep(0.4, 0.55, fbm(g * 0.8)) + smoothstep(1.6, 0.5, length(g)));
+  float shadow = length(g) < 3.0 ? softShadow(p + vec3(0.0, 0.01, 0.0), MOON) : 1.0;
+  vec3 col = base * (MOON_COLOR * max(dot(n, MOON), 0.0) * shadow * 0.15 + NIGHT * 0.6);
+  col += base * glowAt(p, n) * 2.0;
+  // Wet moss: beads of water mirror the moon and, near the stem, the glow.
+  vec2 cell = floor(g * 30.0);
+  float seed = hash(vec3(cell, 4.0));
+  float bead = step(0.94, seed) * smoothstep(0.2, 0.05, length(fract(g * 30.0) - 0.5));
+  vec3 mirror = MOON_COLOR * pow(max(dot(reflect(rd, n), MOON), 0.0), 8.0) * shadow * 0.5
+              + glowAt(p, vec3(0.0, 1.0, 0.0)) * 4.0;
+  return col + bead * mirror;
+}
+
+vec3 sky(vec3 rd) {
+  float toward = max(dot(rd, MOON), 0.0);
+  vec3 col = mix(vec3(0.012, 0.018, 0.021), vec3(0.003, 0.005, 0.007), smoothstep(0.0, 0.5, rd.y));
+  return col + MOON_COLOR * pow(toward, 4.0) * 0.05;
+}
+
+// Moonlit mist hugging the ground; analytic, since it carries no shafts.
+vec3 mist(vec3 col, vec3 ro, vec3 rd, float t) {
+  float k = rd.y / 0.7;
+  float path = abs(k) < 1e-4 ? t : (1.0 - exp(-t * k)) / k;
+  float density = 0.1 * exp(-ro.y / 0.7) * path;
+  float amount = 1.0 - exp(-min(density, 6.0));
+  vec3 haze = vec3(0.009, 0.013, 0.015) + MOON_COLOR * pow(max(dot(rd, MOON), 0.0), 4.0) * 0.02;
+  return mix(col, haze, amount);
+}
+
+// Damp air scatters a faint halo around the gills and stem: the closest
+// approach of the ray to the glowing core, stretched across the gill disc.
+vec3 halo(vec3 ro, vec3 rd, float tHit) {
+  vec3 core = vec3(0.0, 0.62, 0.0);
+  float along = clamp(dot(core - ro, rd), 0.0, tHit);
+  vec3 offset = ro + rd * along - core;
+  float d = length(offset * vec3(1.0 / 1.6, 1.0, 1.0 / 1.6));
+  return GLOW * exp(-d * 4.0) * 0.035 * breath();
+}
+
+vec3 fireflyPosition(int i) {
+  float fi = float(i);
+  float speed = 0.05 + 0.04 * hash(vec3(fi, 5.0, 0.0));
+  float phase = fi * 2.39996;
+  float radius = 0.9 + 1.1 * hash(vec3(fi, 6.0, 0.0));
+  float a = uTime * speed * (mod(fi, 2.0) * 2.0 - 1.0) + phase;
+  float y = 0.25 + 1.1 * hash(vec3(fi, 7.0, 0.0)) + 0.18 * sin(uTime * 0.23 + phase);
+  vec3 p = vec3(cos(a) * radius, y, sin(a) * radius - 0.4);
+  return p + 0.08 * vec3(sin(uTime * 0.9 + phase), sin(uTime * 0.7 + fi), cos(uTime * 0.8 + phase));
+}
+
+// Each firefly flashes for about half a second every few seconds.
+float flash(int i) {
+  float fi = float(i);
+  float period = 3.0 + 3.0 * hash(vec3(fi, 8.0, 0.0));
+  float x = mod(uTime + fi * 1.7, period);
+  return smoothstep(0.0, 0.12, x) * smoothstep(0.6, 0.2, x);
+}
+
+vec3 fireflies(vec3 ro, vec3 rd, float tHit) {
+  vec3 col = vec3(0.0);
+  for (int i = 0; i < FIREFLIES; i++) {
+    vec3 v = fireflyPosition(i) - ro;
+    float along = dot(v, rd);
+    if (along < 0.0 || along > tHit) continue;
+    float d = length(v - rd * along) / along;
+    float f = flash(i);
+    col += FIREFLY * (exp(-d * d * 6e4) * 3.0 + exp(-d * 80.0) * 0.3) * (0.03 + f);
+  }
+  return col;
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / min(uResolution.x, uResolution.y);
+  float yaw = 0.35 * sin(uTime * 0.04) + 0.15;
+  vec3 target = vec3(0.0, 0.56, 0.0);
+  vec3 ro = vec3(sin(yaw) * 3.0, 0.6, cos(yaw) * 3.0);
+  vec3 fw = normalize(target - ro);
+  vec3 rt = normalize(cross(fw, vec3(0, 1, 0)));
+  vec3 up = cross(rt, fw);
+  vec3 rd = normalize(uv.x * rt + uv.y * up + 1.8 * fw);
+
+  vec2 hit = traceMushroom(ro, rd);
+  float tTrunk = traceTrunks(ro, rd);
+  float tGround = rd.y < 0.0 ? -ro.y / rd.y : 1e9;
+  float tHit = min(min(hit.x, tTrunk), tGround);
+
+  vec3 col;
+  if (tHit > 1e8) col = sky(rd);
+  else if (tHit == hit.x) col = shadeMushroom(ro + rd * tHit, rd, hit.y);
+  else if (tHit == tTrunk) col = vec3(0.012, 0.016, 0.016);
+  else col = shadeGround(ro + rd * tHit, rd);
+
+  col = mist(col, ro, rd, min(tHit, 60.0));
+  col += halo(ro, rd, tHit);
+  col += fireflies(ro, rd, tHit);
+
+  col = 1.0 - exp(-col * 1.3);
+  col = pow(col, vec3(0.4545));
+  outColor = vec4(col, 1.0);
+}`;
+
+const presentFragment = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform sampler2D uScene;
+out vec4 outColor;
+
+float grain(vec2 p) {
+  vec3 q = fract(vec3(p.xyx) * 0.1031);
+  q += dot(q, q.yzx + 33.33);
+  return fract((q.x + q.y) * q.z);
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uResolution;
+  vec3 col = texture(uScene, uv).rgb;
+  vec3 wide = textureLod(uScene, uv, 3.0).rgb * 0.5 + textureLod(uScene, uv, 5.0).rgb * 0.5;
+  col += max(wide - 0.25, 0.0) * 0.5;
+  vec2 q = uv - 0.5;
+  col *= 1.0 - 0.5 * dot(q, q);
+  col += (grain(gl_FragCoord.xy) - 0.5) * 0.02;
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+function createProgram(fragmentSource) {
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+  return program;
+}
+
+const sceneProgram = createProgram(sceneFragment);
+const presentProgram = createProgram(presentFragment);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+const sceneUniforms = {
+  resolution: gl.getUniformLocation(sceneProgram, 'uResolution'),
+  time: gl.getUniformLocation(sceneProgram, 'uTime'),
+};
+const presentUniforms = {
+  resolution: gl.getUniformLocation(presentProgram, 'uResolution'),
+  scene: gl.getUniformLocation(presentProgram, 'uScene'),
+};
+
+function target(width, height) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  const levels = Math.floor(Math.log2(Math.max(width, height))) + 1;
+  gl.texStorage2D(gl.TEXTURE_2D, levels, gl.RGBA8, width, height);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const framebuffer = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+  return { framebuffer, texture, width, height };
+}
+
+let buffer = null;
+function frame(ms) {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  const scale = Math.min(1, Math.sqrt(PIXEL_BUDGET / (w * h)));
+  const sw = Math.round(w * scale), sh = Math.round(h * scale);
+  if (!buffer || buffer.width !== sw || buffer.height !== sh) {
+    if (buffer) {
+      gl.deleteFramebuffer(buffer.framebuffer);
+      gl.deleteTexture(buffer.texture);
+    }
+    buffer = target(sw, sh);
+  }
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, buffer.framebuffer);
+  gl.viewport(0, 0, sw, sh);
+  gl.useProgram(sceneProgram);
+  gl.uniform2f(sceneUniforms.resolution, sw, sh);
+  gl.uniform1f(sceneUniforms.time, ms / 1000);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, w, h);
+  gl.useProgram(presentProgram);
+  gl.uniform2f(presentUniforms.resolution, w, h);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, buffer.texture);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.uniform1i(presentUniforms.scene, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

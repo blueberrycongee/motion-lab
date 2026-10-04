@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sand</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #e4ddd0; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const ctx = canvas.getContext('2d');
+
+// The profile signed distance from MUSHROOM.md, ported to JS: y up, ground at 0,
+// cap about 1.12 wide, top near 1.11. Returns [distance, part]:
+// negative inside; part 0 cap, 1 gills, 2 stem, 3 ring.
+function sdEllipse(x, y, rx, ry) {
+  const k0 = Math.hypot(x / rx, y / ry);
+  const k1 = Math.hypot(x / (rx * rx), y / (ry * ry));
+  return k0 * (k0 - 1) / k1;
+}
+
+function mushroom2D(x, y) {
+  x -= 0.05 * y * y;
+  const r = Math.abs(x);
+  const stemR = 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  let stem = Math.max(r - stemR, Math.abs(y - 0.43) - 0.43);
+  const ring = Math.max(r - 0.096 - (0.66 - y) * 0.32, Math.abs(y - 0.605) - 0.05);
+  const under = 0.82 + 0.02 * (1 - Math.min(r * r / 0.3125, 1));
+  const cap = Math.max(sdEllipse(x, y - 0.8, 0.56, 0.31), under - y);
+  const gills = Math.max(r - 0.55, Math.max(y - under, 0.8 + 0.015 * (1 - Math.min(r * r / 0.27, 1)) - y));
+  stem = Math.max(stem, -Math.min(cap, gills));
+  let res = [cap, 0];
+  if (gills < res[0]) res = [gills, 1];
+  if (stem < res[0]) res = [stem, 2];
+  if (ring < res[0]) res = [ring, 3];
+  return res;
+}
+
+// Warts from the canonical Path2D, as [x, y, radius] on the cap face.
+const WARTS = [
+  [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+  [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+  [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+  [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+].map(([x, y, r]) => [x + 0.032, y, r]);
+
+// The vessel, in grains: a glass frame GW wide and PH tall, with DROP rows of open air below its floor.
+const GW = 150, PH = 180, DROP = 60, H = PH + DROP;
+const GROUND = 26, SCALE = 118;
+
+// Coloured craft sand, from the bottom of the frame up.
+const SAND = {
+  soil: '#3d2f22', umber: '#5e4a33', moss: '#66733a',
+  dune: '#d8c69f', sage: '#a9ae98', dusk: '#8399a3', slate: '#56687a', night: '#33404e',
+  cap: '#b8321a', crown: '#82190d', wart: '#efe7d6', gills: '#d2c6ad', stem: '#e8e2d2', shade: '#c9bea6',
+};
+
+// Wavy strata like a sand-art bottle: each boundary has its own swell.
+function stratum(x, y) {
+  const swell = (k) => 4 * Math.sin(x * 0.045 + k * 1.7) + 2.5 * Math.sin(x * 0.12 + k * 3.1);
+  if (y < 10 + swell(1) * 0.5) return 'soil';
+  if (y < 18 + swell(2) * 0.6) return 'umber';
+  if (y < GROUND + swell(3) * 0.3) return 'moss';
+  if (y < 62 + swell(4)) return 'dune';
+  if (y < 98 + swell(5)) return 'sage';
+  if (y < 134 + swell(6)) return 'dusk';
+  if (y < 163 + swell(7)) return 'slate';
+  return 'night';
+}
+
+function pictureAt(col, row) {
+  const x = col + 0.5, y = PH - row - 0.5;
+  const mx = (x - GW / 2) / SCALE, my = (y - GROUND) / SCALE;
+  const [d, part] = mushroom2D(mx, my);
+  if (d > 0 || my < 0) return stratum(x, y);
+  if (part === 1) return 'gills';
+  if (part !== 0) return mx - 0.05 * my * my > 0.04 ? 'shade' : 'stem';
+  if (WARTS.some(([wx, wy, r]) => Math.hypot(mx - wx, (my - wy) / 0.8) < r * 1.15)) return 'wart';
+  return Math.hypot((mx - 0.032) / 0.56, (my - 0.8) / 0.31) < 0.62 ? 'crown' : 'cap';
+}
+
+const picture = [];
+for (let row = 0; row < PH; row++) for (let col = 0; col < GW; col++) picture.push(pictureAt(col, row));
+
+const rgb = Object.fromEntries(Object.entries(SAND).map(([k, hex]) => [k, [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))]));
+
+// Every grain is its own shade, and a few are dark or glassy specks, as in real dyed sand.
+function grain(name) {
+  const roll = Math.random();
+  const k = roll < 0.04 ? 0.6 : roll > 0.97 ? 1.2 : 0.88 + Math.random() * 0.22;
+  const [r, g, b] = rgb[name].map((c) => Math.min(255, Math.round(c * k)));
+  return (255 << 24 | b << 16 | g << 8 | r) >>> 0;
+}
+
+const cells = new Uint32Array(GW * H);
+// Poured grains still on their way down; one takes its final colour where it comes to rest.
+const falling = new Uint8Array(GW * H);
+const speed = new Uint8Array(GW * H);
+let gate = 0, lift = 0;
+
+const isOpen = (col, row) =>
+  col >= 0 && col < GW && cells[row * GW + col] === 0 && (row !== PH || Math.abs(col + 0.5 - GW / 2) < gate);
+
+// A grain only counts as landed once nothing under it is still on the move.
+function restsOnSettled(col, row) {
+  if (row + 1 >= PH) return true;
+  const below = (row + 1) * GW + col;
+  return !falling[below] && (col === 0 || !falling[below - 1]) && (col === GW - 1 || !falling[below + 1]);
+}
+
+// One cellular-automaton tick, bottom row first so a grain moves at most once.
+// Sweep direction alternates so piles don't lean one way. Falling grains
+// gather speed, up to MAX_FALL cells a tick, so a stream thins as it drops.
+const MAX_FALL = 4;
+let tick = 0;
+function step() {
+  const flip = tick++ & 1;
+  for (let row = H - 1; row >= 0; row--) {
+    for (let k = 0; k < GW; k++) {
+      const col = flip ? k : GW - 1 - k;
+      const i = row * GW + col;
+      const g = cells[i];
+      if (!g) continue;
+      cells[i] = 0;
+      let drop = 0;
+      while (drop <= speed[i] && row + drop + 1 < H && isOpen(col, row + drop + 1)) drop++;
+      if (row + drop + 1 >= H) {
+        speed[i] = falling[i] = 0;
+        continue;
+      }
+      let to = i + drop * GW;
+      if (drop === 0) {
+        const side = Math.random() < 0.5 ? -1 : 1;
+        if (isOpen(col + side, row + 1)) to = i + GW + side;
+        else if (isOpen(col - side, row + 1)) to = i + GW - side;
+      }
+      cells[to] = g;
+      if (to !== i) {
+        falling[to] = falling[i];
+        speed[to] = drop ? Math.min(speed[i] + (Math.random() < 0.6), MAX_FALL) : 0;
+        falling[i] = speed[i] = 0;
+      } else if (falling[i] && restsOnSettled(col, row)) {
+        cells[i] = grain(picture[i]);
+        falling[i] = 0;
+      }
+    }
+  }
+}
+
+// Each spout sweeps the frame like a hand pouring from a funnel. A grain is dyed for
+// the cell it should settle into, counting every grain already in its column as
+// landing first; if it rolls aside, it takes the colour of where it stops.
+const spouts = [0.9, 1.37, 1.83, 2.41, 3.07].map((pace, i) => ({ pace, phase: i * 0.37, col: 0 }));
+
+function pour(t) {
+  for (const spout of spouts) {
+    const u = (t * spout.pace / 10 + spout.phase) % 2;
+    spout.col = (u < 1 ? u : 2 - u) * (GW - 1);
+    for (let n = 0; n < 2; n++) {
+      const col = Math.min(Math.round(spout.col) + n, GW - 1);
+      let count = 0;
+      for (let row = 0; row < PH; row++) if (cells[row * GW + col]) count++;
+      if (count >= PH || cells[col]) continue;
+      cells[col] = grain(picture[(PH - 1 - count) * GW + col]);
+      falling[col] = 1;
+    }
+  }
+}
+
+function isFull() {
+  for (let col = 0; col < GW; col++) if (!cells[col]) return false;
+  return true;
+}
+
+function isEmpty() {
+  for (let i = 0; i < GW * PH; i++) if (cells[i]) return false;
+  return true;
+}
+
+// The cycle: pour until the frame is full, admire it, then open the floor.
+const HOLD = 4, SLOT = 6;
+let phase = 'pour', phaseTime = 0;
+
+function advance(dt) {
+  phaseTime += dt;
+  if (phase === 'pour' && isFull()) [phase, phaseTime] = ['hold', 0];
+  else if (phase === 'hold' && phaseTime > HOLD) [phase, phaseTime] = ['drain', 0];
+  else if (phase === 'drain' && isEmpty() && gate > GW / 2) [phase, phaseTime] = ['pour', 0];
+  // The floor first opens a narrow slot, then slides fully aside.
+  const target = phase !== 'drain' ? 0 : phaseTime < SLOT ? 10 : GW / 2 + 1;
+  gate += (target - gate) * Math.min(dt * (phase === 'drain' ? 3 : 8), 1);
+  if (phase !== 'drain' && gate < 0.5) gate = 0;
+  lift += ((phase === 'pour' ? 0 : 1) - lift) * Math.min(dt * 2, 1);
+}
+
+const image = new ImageData(GW, H);
+const pixels = new Uint32Array(image.data.buffer);
+const grains = new OffscreenCanvas(GW, H);
+const grainsCtx = grains.getContext('2d');
+
+function draw() {
+  const w = canvas.width, h = canvas.height;
+  const s = Math.min(h * 0.8 / PH, w * 0.84 / GW);
+  const x0 = (w - GW * s) / 2, y0 = (h - PH * s) * 0.42;
+  const frame = s * 3;
+
+  const wall = ctx.createLinearGradient(0, 0, 0, h);
+  wall.addColorStop(0, '#ece6da');
+  wall.addColorStop(1, '#d3cabb');
+  ctx.fillStyle = wall;
+  ctx.fillRect(0, 0, w, h);
+  // A soft shadow of the frame on the wall behind it.
+  ctx.fillStyle = 'rgba(70, 55, 40, 0.12)';
+  ctx.filter = `blur(${s * 6}px)`;
+  ctx.fillRect(x0 + s * 6, y0 + s * 10, GW * s, PH * s);
+  ctx.filter = 'none';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+  ctx.fillRect(x0, y0, GW * s, PH * s);
+
+  pixels.set(cells);
+  grainsCtx.putImageData(image, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(grains, x0, y0, GW * s, H * s);
+
+  // Glass catches two long reflections.
+  const glare = ctx.createLinearGradient(x0, y0, x0 + GW * s, y0 + PH * s);
+  glare.addColorStop(0.18, 'rgba(255, 255, 255, 0)');
+  glare.addColorStop(0.22, 'rgba(255, 255, 255, 0.1)');
+  glare.addColorStop(0.3, 'rgba(255, 255, 255, 0)');
+  glare.addColorStop(0.34, 'rgba(255, 255, 255, 0.05)');
+  glare.addColorStop(0.37, 'rgba(255, 255, 255, 0)');
+  ctx.fillStyle = glare;
+  ctx.fillRect(x0, y0, GW * s, PH * s);
+
+  // Walnut sides and the two halves of the floor, which slide apart under the frame.
+  const wood = ctx.createLinearGradient(0, y0, 0, y0 + PH * s);
+  wood.addColorStop(0, '#4a3020');
+  wood.addColorStop(1, '#2e1d13');
+  ctx.fillStyle = wood;
+  ctx.fillRect(x0 - frame, y0 - frame * 0.3, frame, PH * s + frame * 1.3);
+  ctx.fillRect(x0 + GW * s, y0 - frame * 0.3, frame, PH * s + frame * 1.3);
+  const half = Math.max(GW / 2 - gate, 0) * s;
+  ctx.fillRect(x0 - frame, y0 + PH * s, half + frame, frame);
+  ctx.fillRect(x0 + GW * s - half, y0 + PH * s, half + frame, frame);
+
+  // Brass funnels ride along the open top, and lift away while the frame is full.
+  const metal = ctx.createLinearGradient(-s * 6, 0, s * 6, 0);
+  metal.addColorStop(0, '#6b4f22');
+  metal.addColorStop(0.35, '#c9a25a');
+  metal.addColorStop(1, '#5a421c');
+  ctx.fillStyle = metal;
+  for (const spout of spouts) {
+    ctx.setTransform(1, 0, 0, 1, x0 + (spout.col + 0.5) * s, y0 - s - lift * (y0 + s * 20));
+    ctx.beginPath();
+    ctx.moveTo(-s * 6, -s * 14);
+    ctx.lineTo(s * 6, -s * 14);
+    ctx.lineTo(s * 1.2, -s * 5);
+    ctx.lineTo(s * 1.2, 0);
+    ctx.lineTo(-s * 1.2, 0);
+    ctx.lineTo(-s * 1.2, -s * 5);
+    ctx.fill();
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+const STEPS_PER_SECOND = 220;
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+}
+
+let simTime = 0, pending = 0;
+function simulate(dt) {
+  pending += dt * STEPS_PER_SECOND;
+  for (let n = 0; pending >= 1 && n < 8; n++, pending--) {
+    simTime += 1 / STEPS_PER_SECOND;
+    if (phase === 'pour') pour(simTime);
+    step();
+    advance(1 / STEPS_PER_SECOND);
+  }
+  pending = Math.min(pending, 1);
+}
+
+// Begin with the frame already a third full.
+for (let i = 0; i < 2200; i++) simulate(1 / STEPS_PER_SECOND);
+
+let last = performance.now();
+function frame(ms) {
+  const dt = Math.min((ms - last) / 1000, 0.1);
+  last = ms;
+  resize();
+  simulate(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

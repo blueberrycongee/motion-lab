@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Life</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1c2321; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+
+// The profile signed distance from MUSHROOM.md, ported to JS: y up, ground at 0,
+// cap about 1.12 wide, top near 1.11. Returns [distance, part]:
+// negative inside; part 0 cap, 1 gills, 2 stem, 3 ring.
+function sdEllipse(x, y, rx, ry) {
+  const k0 = Math.hypot(x / rx, y / ry);
+  const k1 = Math.hypot(x / (rx * rx), y / (ry * ry));
+  return k0 * (k0 - 1) / k1;
+}
+
+function mushroom2D(x, y) {
+  x -= 0.05 * y * y;
+  const r = Math.abs(x);
+  const stemR = 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  let stem = Math.max(r - stemR, Math.abs(y - 0.43) - 0.43);
+  const ring = Math.max(r - 0.096 - (0.66 - y) * 0.32, Math.abs(y - 0.605) - 0.05);
+  const under = 0.82 + 0.02 * (1 - Math.min(r * r / 0.3125, 1));
+  const cap = Math.max(sdEllipse(x, y - 0.8, 0.56, 0.31), under - y);
+  const gills = Math.max(r - 0.55, Math.max(y - under, 0.8 + 0.015 * (1 - Math.min(r * r / 0.27, 1)) - y));
+  stem = Math.max(stem, -Math.min(cap, gills));
+  let res = [cap, 0];
+  if (gills < res[0]) res = [gills, 1];
+  if (stem < res[0]) res = [stem, 2];
+  if (ring < res[0]) res = [ring, 3];
+  return res;
+}
+
+// Warts from the canonical Path2D, as [x, y, radius] on the cap face.
+const WARTS = [
+  [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+  [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+  [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+  [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+].map(([x, y, r]) => [x + 0.032, y, r]);
+
+// Pigments a cell can carry; a newborn takes the pigment most of its parents share.
+const NONE = 0, CAP = 1, CROWN = 2, WART = 3, GILLS = 4, STEM = 5, MOSS = 6, SPORE = 7;
+
+function pigmentAt(x, y) {
+  if (y < 0) return y > -0.07 && Math.abs(x - 0.02) < 0.42 ? MOSS : NONE;
+  const [d, part] = mushroom2D(x, y);
+  if (d > 0) return NONE;
+  if (part === 1) return GILLS;
+  if (part !== 0) return STEM;
+  if (WARTS.some(([wx, wy, r]) => Math.hypot(x - wx, (y - wy) / 0.8) < r + 0.02)) return WART;
+  return Math.hypot((x - 0.032) / 0.56, (y - 0.8) / 0.31) < 0.6 ? CROWN : CAP;
+}
+
+// The board is sized so the shorter side always holds SPAN cells.
+const SPAN = 150, SCALE = 88;
+const RATE = 10;
+// One cycle in generations: the seed grows in and holds still, then Life runs
+// and a few spores fly at it to make sure the whole picture comes apart.
+const CYCLE = 320, GROW = 24, HOLD = 30, START = GROW + HOLD;
+
+let cols, rows, alive, before, age, pigment, ghost, seed, seedRow, state, texture;
+
+const at = (x, y) => y * cols + x;
+
+// The seed is a mosaic of blocks, Life's simplest still life, one cell apart.
+// Inside the picture the mosaic is stable; it starts to unravel at the corners
+// of the outline.
+function plantSeed() {
+  seed = new Uint8Array(cols * rows);
+  seedRow = new Int16Array(cols * rows).fill(-1);
+  const groundRow = Math.round(rows / 2 + SCALE * 0.56);
+  const centerX = Math.floor(cols / 2) - 1;
+  for (let by = 0; by < rows - 1; by += 3) {
+    for (let bx = centerX % 3; bx < cols - 1; bx += 3) {
+      const x = (bx + 1 - centerX) / SCALE, y = (groundRow - by - 1) / SCALE;
+      const p = pigmentAt(x, y);
+      if (!p) continue;
+      for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+        seed[at(bx + dx, by + dy)] = p;
+        seedRow[at(bx + dx, by + dy)] = groundRow - by;
+      }
+    }
+  }
+  return { groundRow, centerX };
+}
+
+// Spores: gliders launched at the mushroom from three sides, staggered so the collapse spreads.
+const GLIDER = [[1, 0], [2, 1], [0, 2], [1, 2], [2, 2]];
+let launches;
+
+function aimSpores({ groundRow, centerX }) {
+  const top = groundRow - SCALE * 1.1;
+  launches = [
+    { gen: START + 4, x: centerX - SCALE * 0.62, y: top - 8, dx: 1, dy: 1 },
+    { gen: START + 30, x: centerX + SCALE * 0.66, y: groundRow - SCALE * 0.3, dx: -1, dy: 1 },
+    { gen: START + 60, x: centerX - SCALE * 0.5, y: groundRow - SCALE * 0.1, dx: 1, dy: -1 },
+  ].map((l) => ({ ...l, x: Math.round(l.x), y: Math.round(l.y) }));
+}
+
+function launch({ x, y, dx, dy }) {
+  for (const [gx, gy] of GLIDER) {
+    const cx = x + (dx > 0 ? gx : 2 - gx), cy = y + (dy > 0 ? gy : 2 - gy);
+    if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) continue;
+    alive[at(cx, cy)] = 1;
+    pigment[at(cx, cy)] = SPORE;
+    age[at(cx, cy)] = 0;
+  }
+}
+
+function majority(a, b, c) {
+  return a === b || a === c ? a : b === c ? b : [a, b, c][Math.floor(Math.random() * 3)];
+}
+
+function lifeStep() {
+  const next = new Uint8Array(cols * rows);
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const parents = [];
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if ((dx || dy) && nx >= 0 && ny >= 0 && nx < cols && ny < rows && alive[at(nx, ny)]) {
+            parents.push(pigment[at(nx, ny)]);
+          }
+        }
+      }
+      const i = at(x, y);
+      const n = parents.length;
+      if (alive[i] ? n === 2 || n === 3 : n === 3) next[i] = 1;
+      if (next[i] && !alive[i]) {
+        pigment[i] = majority(...parents);
+        age[i] = 0;
+      }
+    }
+  }
+  return next;
+}
+
+// During the growing phase the seed rises out of the ground row by row,
+// while whatever Life left behind from the last cycle withers.
+function growStep(gen) {
+  const height = (gen / GROW) * SCALE * 1.15;
+  const next = new Uint8Array(cols * rows);
+  for (let i = 0; i < next.length; i++) {
+    if (seed[i] && seedRow[i] <= height) {
+      next[i] = 1;
+      if (!alive[i]) age[i] = 0;
+      pigment[i] = seed[i];
+    } else next[i] = alive[i] && Math.random() < 1 - gen / GROW;
+  }
+  return next;
+}
+
+let generation = 0;
+
+function advance() {
+  const gen = generation % CYCLE;
+  const next = gen < GROW ? growStep(gen + 1) : gen < START ? alive.slice() : lifeStep();
+  before = alive;
+  alive = next;
+  for (const l of launches) if (l.gen === gen) launch(l);
+  for (let i = 0; i < alive.length; i++) {
+    if (alive[i]) {
+      age[i] = Math.min(age[i] + 1, 255);
+      ghost[i] = 0;
+    } else ghost[i] = before[i] ? 255 : Math.max(ghost[i] - 24, 0);
+  }
+  generation++;
+}
+
+function upload() {
+  for (let i = 0; i < alive.length; i++) {
+    state[i * 4] = alive[i] * 255;
+    state[i * 4 + 1] = before[i] * 255;
+    state[i * 4 + 2] = pigment[i];
+    state[i * 4 + 3] = alive[i] ? age[i] : ghost[i];
+  }
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, cols, rows, 0, gl.RGBA, gl.UNSIGNED_BYTE, state);
+}
+
+function reset(w, h) {
+  const cell = Math.min(w, h) / SPAN;
+  cols = Math.ceil(w / cell);
+  rows = Math.ceil(h / cell);
+  alive = new Uint8Array(cols * rows);
+  before = new Uint8Array(cols * rows);
+  age = new Uint8Array(cols * rows);
+  pigment = new Uint8Array(cols * rows);
+  ghost = new Uint8Array(cols * rows);
+  state = new Uint8Array(cols * rows * 4);
+  aimSpores(plantSeed());
+  generation = 0;
+}
+
+const vertex = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+// Each pixel sums soft blobs from the 3 × 3 cells around it, so neighbours
+// fuse into rounded enamel beads while a one-cell gap stays open.
+const fragment = `#version 300 es
+precision highp float;
+uniform sampler2D uState;
+uniform vec2 uResolution;
+uniform float uCell;
+uniform float uBlend;
+out vec4 outColor;
+
+const float K = 3.9;
+
+vec3 pigmentColor(float p) {
+  if (p < 1.5) return vec3(0.72, 0.2, 0.1);
+  if (p < 2.5) return vec3(0.47, 0.08, 0.05);
+  if (p < 3.5) return vec3(0.94, 0.9, 0.82);
+  if (p < 4.5) return vec3(0.8, 0.74, 0.62);
+  if (p < 5.5) return vec3(0.9, 0.87, 0.79);
+  if (p < 6.5) return vec3(0.42, 0.5, 0.24);
+  return vec3(0.93, 0.78, 0.45);
+}
+
+// Newborns flash pale, settle into their pigment, and long-lived ash slowly dulls.
+vec3 aged(vec3 base, float age) {
+  vec3 col = mix(vec3(1.0, 0.95, 0.85), base, smoothstep(0.0, 6.0, age));
+  float ash = smoothstep(40.0, 200.0, age);
+  return mix(col, vec3(dot(col, vec3(0.3, 0.5, 0.2))) * 0.8, ash * 0.55);
+}
+
+void main() {
+  vec2 grid = vec2(textureSize(uState, 0));
+  vec2 cellPos = gl_FragCoord.xy / uCell;
+  cellPos.y = uResolution.y / uCell - cellPos.y;
+  ivec2 home = ivec2(floor(cellPos));
+  float grow = smoothstep(0.0, 1.0, uBlend);
+
+  float field = 0.0, shadow = 0.0;
+  vec2 gradient = vec2(0.0);
+  vec3 col = vec3(0.0);
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      ivec2 id = home + ivec2(dx, dy);
+      if (id.x < 0 || id.y < 0 || id.x >= int(grid.x) || id.y >= int(grid.y)) continue;
+      vec4 s = texelFetch(uState, id, 0);
+      float presence = mix(s.g, s.r, grow);
+      if (presence <= 0.0) continue;
+      vec2 d = cellPos - (vec2(id) + 0.5);
+      float w = presence * exp(-K * dot(d, d) / presence);
+      field += w;
+      gradient += w * -2.0 * K * d;
+      vec2 ds = d - vec2(-0.16, 0.2);
+      shadow += presence * exp(-K * 0.7 * dot(ds, ds));
+      float age = s.r > 0.5 ? s.a * 255.0 : 20.0;
+      col += w * aged(pigmentColor(s.b * 255.0), age);
+    }
+  }
+
+  // Pegboard: dark felt with a pinhole at every cell.
+  vec2 local = fract(cellPos) - 0.5;
+  vec3 board = vec3(0.11, 0.135, 0.13) * (1.0 - 0.35 * smoothstep(0.12, 0.06, length(local)));
+  vec2 uv = gl_FragCoord.xy / uResolution - 0.5;
+  board *= 1.0 - 0.5 * dot(uv, uv);
+
+  // Recently dead cells leave a faint stain of their pigment.
+  vec4 self = texelFetch(uState, home, 0);
+  if (self.r < 0.5 && self.a > 0.0) {
+    board = mix(board, pigmentColor(self.b * 255.0) * 0.35, self.a * 0.45 * smoothstep(0.42, 0.3, length(local)));
+  }
+  board *= 1.0 - 0.5 * smoothstep(0.2, 0.8, shadow);
+
+  float px = 1.5 / uCell;
+  float edge = smoothstep(0.5 - px, 0.5 + px, field);
+  vec3 bead = col / max(field, 1e-4);
+  vec3 n = normalize(vec3(-gradient / max(field, 0.3) * 0.18, 1.0));
+  vec3 light = normalize(vec3(-0.5, 0.6, 0.65));
+  float diffuse = 0.55 + 0.5 * dot(n, light);
+  float spec = pow(max(dot(reflect(-light, n), vec3(0.0, 0.0, 1.0)), 0.0), 30.0);
+  vec3 lit = bead * diffuse + spec * 0.35;
+  outColor = vec4(pow(mix(board, lit, edge), vec3(0.95)), 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+gl.linkProgram(program);
+gl.useProgram(program);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const position = gl.getAttribLocation(program, 'position');
+gl.enableVertexAttribArray(position);
+gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+
+texture = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, texture);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+
+const uResolution = gl.getUniformLocation(program, 'uResolution');
+const uCell = gl.getUniformLocation(program, 'uCell');
+const uBlend = gl.getUniformLocation(program, 'uBlend');
+
+let tween = 0, last = performance.now();
+function frame(ms) {
+  const dt = Math.min((ms - last) / 1000, 0.1);
+  last = ms;
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    gl.viewport(0, 0, w, h);
+    reset(w, h);
+    upload();
+  }
+  // Each generation is shown as a short tween from the previous one.
+  tween += dt * RATE;
+  if (tween >= 1) {
+    advance();
+    upload();
+    tween = Math.min(tween - 1, 0.5);
+  }
+  gl.uniform2f(uResolution, w, h);
+  gl.uniform1f(uCell, Math.min(w, h) / SPAN);
+  gl.uniform1f(uBlend, tween);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

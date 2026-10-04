@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sumi-e</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #ece4d1; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2', { antialias: false });
+
+const CYCLE = 34, FADE = 3;
+const MAX_LAYER = 1600;      // long side of the bristle layer, in pixels
+const WET_SCALE = 0.5;       // wet ink is soft-edged, so its layer can be coarser
+const WET_CLOCK = 40;        // seconds that fit in the wet layer's 8-bit time channel
+const SPACING = 1.2;         // pixels of brush travel between samples
+const BANDS = 6;             // tone steps across a side-loaded brush
+
+const INK = [24, 21, 20], SEAL = [178, 36, 28];
+
+const lean = (y) => 0.05 * y * y;
+const stemR = (y) => 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+const CX = lean(0.8);
+
+const vertex = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+// The wet layer holds, per spot, how much ink was laid (r), when (g) and how much of
+// it was vermilion (b). Ink and pigment darken the paper by absorbance, and each wash
+// creeps outward for a while after it is laid, further along the paper's fibres: the
+// feathered edge of ink on xuan paper. Warts are dabs of shell white laid on last.
+const fragment = `#version 300 es
+precision highp float;
+uniform sampler2D uMarks;
+uniform sampler2D uWet;
+uniform sampler2D uPaper;
+uniform vec2 uResolution;
+uniform vec2 uSpread;
+uniform vec3 uFrame;    // mushroom origin and scale, in pixels
+uniform float uTime;
+uniform float uFade;
+uniform float uWarts;
+out vec4 outColor;
+
+const vec3 INK = vec3(3.1, 3.2, 3.3);
+const vec3 VERMILION = vec3(0.3, 2.2, 3.3);
+
+float hash(vec2 p) {
+  p = fract(p * vec2(0.1031, 0.1030));
+  p += dot(p, p.yx + 33.33);
+  return fract((p.x + p.y) * p.x);
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+}
+
+float shellWhite(vec2 p) {
+  const vec3 spots[14] = vec3[](
+    vec3(-0.02, 1.07, 0.03), vec3(0.17, 1.05, 0.026), vec3(-0.22, 1.03, 0.028), vec3(0.33, 0.99, 0.03),
+    vec3(-0.38, 0.96, 0.024), vec3(0.06, 0.99, 0.034), vec3(-0.12, 0.94, 0.022), vec3(0.22, 0.93, 0.025),
+    vec3(0.44, 0.9, 0.02), vec3(-0.47, 0.88, 0.018), vec3(-0.28, 0.89, 0.026), vec3(0.1, 0.88, 0.02),
+    vec3(0.34, 0.875, 0.017), vec3(-0.06, 0.88, 0.016));
+  float cover = 0.0;
+  for (int i = 0; i < 14; i++) {
+    float shown = clamp(uWarts - float(i), 0.0, 1.0);
+    if (shown <= 0.0) break;
+    vec2 d = (p - vec2(spots[i].x + ${CX}, spots[i].y)) / vec2(1.0, 0.8);
+    float r = spots[i].z * 1.1 * (0.6 + 0.4 * shown) * (1.0 + 0.35 * (noise(p * 80.0 + float(i) * 7.1) - 0.5));
+    float body = smoothstep(r, r * 0.8, length(d));
+    cover = max(cover, body * (0.8 + 0.18 * noise(p * 300.0)));
+  }
+  return cover;
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uResolution;
+  vec3 fibres = 1.0 - texture(uPaper, uv).rgb;
+  vec3 paper = vec3(0.93, 0.9, 0.83) * (1.0 - 0.09 * fibres.r + 0.05 * fibres.g - 0.07 * fibres.b);
+
+  vec4 wet = texture(uWet, uv);
+  float wick = 0.55 + 0.8 * (fibres.r + fibres.g) + 0.6 * fibres.b;
+  float halo = 0.0, haloRed = 0.0;
+  float turn = hash(gl_FragCoord.xy) * 6.283;
+  for (int i = 0; i < 20; i++) {
+    float r = sqrt((float(i) + 0.5) / 20.0);
+    float a = float(i) * 2.39996 + turn;
+    vec4 near = texture(uWet, uv + vec2(cos(a), sin(a)) * r * uSpread);
+    float age = max(uTime - near.g * ${WET_CLOCK}.0, 0.0);
+    float reach = (1.0 - exp(-age / 1.2)) * wick;
+    float h = near.r * smoothstep(reach, reach * 0.2, r);
+    if (h > halo) { halo = h; haloRed = near.b; }
+  }
+  float amount = max(wet.r, 0.3 * halo) * (1.0 - uFade);
+  vec3 absorb = amount * 1.6 * mix(INK, VERMILION, wet.r > 0.3 * halo ? wet.b : haloRed);
+  vec3 marks = mix(texture(uMarks, uv).rgb, vec3(1.0), uFade);
+  vec3 col = paper * exp(-absorb) * marks;
+
+  vec2 p = (gl_FragCoord.xy - uFrame.xy) / uFrame.z;
+  col = mix(col, vec3(0.965, 0.95, 0.915), shellWhite(p) * (1.0 - uFade));
+
+  vec2 c = uv - 0.5;
+  col *= 1.0 - 0.22 * dot(c, c);
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+gl.bindAttribLocation(program, 0, 'position');
+gl.linkProgram(program);
+if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+gl.useProgram(program);
+const uniform = (name) => gl.getUniformLocation(program, name);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+
+for (const [unit, name] of ['uMarks', 'uWet', 'uPaper'].entries()) {
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.uniform1i(uniform(name), unit);
+}
+
+function upload(unit, source) {
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+}
+
+function mulberry32(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function noise1(x) {
+  const i = Math.floor(x), f = x - i;
+  const h = (n) => {
+    const v = Math.sin(n * 127.1) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  return h(i) + (h(i + 1) - h(i)) * f * f * (3 - 2 * f);
+}
+
+function noise2(x, y) {
+  const i = Math.floor(x), j = Math.floor(y), f = smooth(x - i), g = smooth(y - j);
+  const h = (a, b) => {
+    const v = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  const top = h(i, j) + (h(i + 1, j) - h(i, j)) * f, bottom = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * f;
+  return top + (bottom - top) * g;
+}
+
+const rgb = (c) => `rgb(${c.map(Math.round).join(',')})`;
+const smooth = (u) => u * u * (3 - 2 * u);
+const clamp01 = (v) => Math.min(Math.max(v, 0), 1);
+
+// Xuan paper: long fibres in every direction over a cloudy formation. Each kind of
+// fibre goes in its own channel so the shader can tell them apart.
+function paperLayer(w, h, random) {
+  const layer = new OffscreenCanvas(w, h);
+  const ctx = layer.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, w, h);
+  const unit = Math.max(w, h) / 1000;
+  for (let i = 0; i < 90; i++) {
+    const x = random() * w, y = random() * h, r = (40 + random() * 160) * unit;
+    const cloud = ctx.createRadialGradient(x, y, 0, x, y, r);
+    cloud.addColorStop(0, 'rgba(255,255,0,0.14)');
+    cloud.addColorStop(1, 'rgba(255,255,0,0)');
+    ctx.fillStyle = cloud;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  for (let i = 0; i < w * h / 120; i++) {
+    const x = random() * w, y = random() * h, a = random() * Math.PI * 2, len = (6 + random() ** 2 * 45) * unit;
+    const bend = (random() - 0.5) * len * 0.6;
+    ctx.strokeStyle = random() < 0.6 ? 'rgb(0,255,255)' : 'rgb(255,0,255)';
+    ctx.globalAlpha = 0.08 + random() * 0.25;
+    ctx.lineWidth = (0.4 + random() * 0.8) * unit;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.quadraticCurveTo(x + Math.cos(a) * len / 2 - Math.sin(a) * bend, y + Math.sin(a) * len / 2 + Math.cos(a) * bend,
+      x + Math.cos(a) * len, y + Math.sin(a) * len);
+    ctx.stroke();
+  }
+  return layer;
+}
+
+// The painter's sequence, in mushroom units and seconds. A brush carries an amount of
+// ink across its width, from the heel (0) to the tip (1): a side-loaded brush has a
+// heavier tip. `red` is the share of vermilion, `wet` how much the wash spreads and
+// `dry` how soon the bristles run out.
+function plan(random) {
+  const jitter = (v, amount) => v + (random() - 0.5) * amount;
+  const arc = (rx, ry, a0, a1) => (u) => {
+    const a = a0 + (a1 - a0) * u;
+    return [CX + rx * Math.cos(a), 0.8 + ry * Math.sin(a)];
+  };
+  const bend = (a, c, b) => (u) => [0, 1].map((k) => (1 - u) ** 2 * a[k] + 2 * u * (1 - u) * c[k] + u * u * b[k]);
+  const alongStem = (offset, y0, y1) => (u) => {
+    const y = y0 + (y1 - y0) * u;
+    return [lean(y) + offset(y), y];
+  };
+  const steps = [];
+  let at = 0.4;
+  const add = (dur, step, pause = 0.35) => {
+    steps.push({ type: 'brush', at, dur, width: 0.05, ink: [0.8, 0.8], red: [0, 0], side: 1, wet: 0.5, dry: 0, lift: 0.3, ...step });
+    at += dur + pause;
+  };
+
+  const capLoad = { ink: [0.5, 0.95], red: [1, 0.75], wet: 0.85, dry: 0.5 };
+  add(1.6, { ...capLoad, path: arc(0.5, 0.25, Math.PI - 0.1, Math.PI / 2 - 0.3), width: 0.13, side: -1, pool: 'start' });
+  add(1.6, { ...capLoad, path: arc(0.5, 0.25, 0.1, Math.PI / 2 + 0.3), width: 0.13, side: 1, pool: 'start' });
+  add(1.5, { ...capLoad, path: arc(0.37, 0.155, Math.PI - 0.15, 0.15), width: 0.15, side: -1, ink: [0.5, 0.75], dry: 0.25 });
+  add(1.1, { ...capLoad, path: bend([CX - 0.5, 0.85], [CX, 0.875], [CX + 0.5, 0.85]), width: 0.07, ink: [0.5, 0.58],
+    red: [1, 1], lift: 0.6 });
+  steps.push({ type: 'warts', at, dur: 2.4 });
+  at += 2.8;
+
+  add(1, { path: bend([CX - 0.5, 0.82], [CX, 0.838], [CX + 0.51, 0.82]), width: 0.024, ink: [0.45, 0.7], wet: 0.3,
+    dry: 0.7, lift: 0.7, pool: 'end' });
+  add(1.8, { path: alongStem(() => 0.004, 0.84, 0.02), width: (u) => 1.9 * stemR(0.84 - 0.82 * u), ink: [0.06, 0.2],
+    wet: 0.9, dry: 0.5, lift: 0 });
+  add(1, { path: alongStem((y) => stemR(y) * 0.97, 0.82, 0.015), width: 0.011, ink: [0.75, 0.75], wet: 0.25, dry: 0.45, lift: 0.5 });
+  add(0.9, { path: alongStem((y) => -stemR(y) * 0.98, 0.8, 0.02), width: 0.009, ink: [0.5, 0.5], wet: 0.1, dry: 0.85, lift: 0.6 }, 0.25);
+  add(0.6, { path: bend([lean(0.6) - 0.13, 0.6], [lean(0.6), 0.578], [lean(0.6) + 0.15, 0.6]), width: 0.035,
+    ink: [0.05, 0.25], side: -1, wet: 0.7, dry: 0.3, lift: 0.5 });
+
+  add(1.1, { path: bend([-0.62, 0.014], [0.05, -0.022], [jitter(0.7, 0.06), 0.004]), width: 0.06, ink: [0.55, 0.55],
+    wet: 0.1, dry: 1, lift: 0.5 }, 0.45);
+  for (const [x, dx, h] of [[-0.24, -0.06, 0.2], [-0.33, -0.12, 0.13], [-0.16, 0.05, 0.12], [0.27, 0.07, 0.23], [0.36, 0.14, 0.14], [0.2, -0.04, 0.11]]) {
+    const base = [jitter(x, 0.04), 0.005], tip = [base[0] + jitter(dx, 0.04), jitter(h, 0.04)];
+    add(0.35, { path: bend(base, [base[0] + dx * 0.1, tip[1] * 0.6], tip), width: 0.024, ink: [0.95, 0.95], wet: 0.4,
+      dry: 0.2, lift: 1, pool: 'start', ease: (u) => u * u }, 0.12);
+  }
+  for (const [x, y] of [[-0.45, 0.03], [-0.38, 0.06], [0.44, 0.04], [0.5, 0.015], [-0.08, -0.04], [0.12, -0.035], [0.56, 0.06]]) {
+    steps.push({ type: 'dot', at, dur: 0.15, x: jitter(x, 0.04), y: jitter(y, 0.02), r: 0.009 + random() * 0.008 });
+    at += 0.17;
+  }
+  steps.push({ type: 'seal', at: at + 0.8, dur: 0.1, x: 0.7, y: 0.36, size: 0.085 });
+  return steps;
+}
+
+let marks, wet, marksCtx, wetCtx, frame, steps, cycle = -1, dirty = false;
+
+function resize(w, h) {
+  const k = Math.min(1, MAX_LAYER / Math.max(w, h));
+  const lw = Math.round(w * k), lh = Math.round(h * k);
+  const s = Math.min(lw, lh) * 0.56;
+  frame = { k, s, x: lw / 2 - 0.05 * s, y: lh / 2 + 0.53 * s };
+  marks = new OffscreenCanvas(lw, lh);
+  wet = new OffscreenCanvas(Math.round(lw * WET_SCALE), Math.round(lh * WET_SCALE));
+  marksCtx = marks.getContext('2d');
+  wetCtx = wet.getContext('2d');
+  upload(2, paperLayer(lw, lh, mulberry32(7)));
+  gl.uniform2f(uniform('uResolution'), w, h);
+  gl.uniform2f(uniform('uSpread'), (0.035 * s) / lw, (0.035 * s) / lh);
+  gl.uniform3f(uniform('uFrame'), frame.x / k, (lh - frame.y) / k, frame.s / k);
+  cycle = -1;
+}
+
+function startCycle(n) {
+  marksCtx.globalCompositeOperation = 'source-over';
+  marksCtx.fillStyle = '#fff';
+  marksCtx.fillRect(0, 0, marks.width, marks.height);
+  wetCtx.globalCompositeOperation = 'source-over';
+  wetCtx.fillStyle = '#000';
+  wetCtx.fillRect(0, 0, wet.width, wet.height);
+  wetCtx.globalCompositeOperation = 'lighten';
+  steps = plan(mulberry32(n * 31 + 5));
+  dirty = true;
+}
+
+const toPixels = ([x, y]) => [frame.x + x * frame.s, frame.y - y * frame.s];
+
+// Resamples the stroke path evenly in pixels, with normals and the brush width
+// shaped by pressing down at the start and lifting at the end.
+function trace(step) {
+  const raw = [];
+  for (let i = 0; i <= 200; i++) raw.push([...toPixels(step.path(i / 200)), i / 200]);
+  const lengths = [0];
+  for (let i = 1; i < raw.length; i++) lengths.push(lengths[i - 1] + Math.hypot(raw[i][0] - raw[i - 1][0], raw[i][1] - raw[i - 1][1]));
+  const total = lengths[lengths.length - 1], n = Math.max(2, Math.ceil(total / SPACING));
+  const points = [];
+  for (let i = 0, j = 0; i <= n; i++) {
+    const at = (total * i) / n;
+    while (j < raw.length - 2 && lengths[j + 1] < at) j++;
+    const f = (at - lengths[j]) / Math.max(lengths[j + 1] - lengths[j], 1e-6);
+    const u = raw[j][2] + (raw[j + 1][2] - raw[j][2]) * f;
+    const width = typeof step.width === 'function' ? step.width(u) : step.width;
+    const press = Math.min(1, 0.6 + u * 8) * (1 - step.lift * smooth(Math.max(0, (u - 0.55) / 0.45)));
+    const wobble = 1 + 0.3 * (noise1(at / frame.s * 9 + step.at) - 0.5);
+    points.push({ x: raw[j][0] + (raw[j + 1][0] - raw[j][0]) * f, y: raw[j][1] + (raw[j + 1][1] - raw[j][1]) * f,
+      w: width * frame.s * press * wobble, u: i / n, s: at / frame.s });
+  }
+  for (let i = 0; i <= n; i++) {
+    const a = points[Math.max(i - 1, 0)], b = points[Math.min(i + 1, n)];
+    const d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    points[i].nx = -(b.y - a.y) / d;
+    points[i].ny = (b.x - a.x) / d;
+  }
+  return points;
+}
+
+// Ink across the brush (t from heel to tip) and along the stroke (u) as the brush unloads.
+function inkAt(step, t, u) {
+  return (step.ink[0] + (step.ink[1] - step.ink[0]) * smooth(t)) * clamp01(1 - step.dry * 1.2 * u + 0.15);
+}
+
+// Each bristle carries its own ink and wanders a little across the brush. On a dry
+// brush the outer bristles run out first and skip over the paper's tooth, leaving the
+// white streaks of flying white.
+function loadBrush(step, random) {
+  const points = trace(step);
+  const widest = Math.max(...points.map((p) => p.w));
+  const count = Math.round(Math.min(Math.max(widest / 2.5, 5), 48));
+  const bristles = [];
+  for (let j = 0; j < count; j++) {
+    const offset = -1 + (2 * (j + 0.5)) / count + (random() - 0.5) * 2 / count;
+    bristles.push({ offset, t: clamp01((offset * step.side + 1) / 2), thirst: 0.6 + random() * 0.8 + 0.8 * Math.abs(offset),
+      thickness: (0.5 + random() * 1.3) / count, seed: random() * 100, lag: Math.floor(random() * 8), drawn: 0 });
+  }
+  return { points, bristles, wetDrawn: 0 };
+}
+
+function bristleAt(p, bristle, spread) {
+  const offset = bristle.offset + (noise1(p.u * 9 + bristle.seed) - 0.5) * spread;
+  return [p.x + p.nx * offset * p.w / 2, p.y + p.ny * offset * p.w / 2];
+}
+
+function drawBristle(step, brush, bristle, to) {
+  const ctx = marksCtx, points = brush.points, spread = 2.5 / brush.bristles.length;
+  const grain = 0.12 + 0.75 * step.dry * (1 - step.wet * 0.8);
+  ctx.strokeStyle = rgb(INK.map((c, i) => c + ([255, 90, 50][i] - c) * (step.red[0] + (step.red[1] - step.red[0]) * bristle.t)));
+  let open = false, runStart = 0;
+  const finish = () => { if (open) ctx.stroke(); open = false; };
+  for (let i = bristle.drawn + 1; i <= to; i++) {
+    const p = points[i];
+    // The paper's tooth: gaps are long along the stroke and shared by neighbouring bristles.
+    const tooth = noise2(p.s * 40, bristle.offset * brush.bristles.length / 3 + step.at);
+    const load = 1 - step.dry * p.u * bristle.thirst * 1.5 + step.dry * 1.2 * (tooth - 0.5);
+    if (load < 0.15) { finish(); continue; }
+    if (open && i - runStart > 4) finish();
+    if (!open) {
+      ctx.globalAlpha = Math.min(1, grain * (0.4 + inkAt(step, bristle.t, 0)) * (0.5 + 0.5 * Math.min(load, 1)));
+      ctx.lineWidth = Math.max(0.6, p.w * bristle.thickness * Math.min(1, load * 1.6));
+      ctx.beginPath();
+      ctx.moveTo(...bristleAt(points[i - 1], bristle, spread));
+      open = true;
+      runStart = i;
+    }
+    ctx.lineTo(...bristleAt(p, bristle, spread));
+  }
+  finish();
+  bristle.drawn = to;
+}
+
+// The body of the stroke goes into the wet layer as bands of ink across the brush,
+// with ragged outer edges. The layer keeps the maximum, so overlapping pieces never
+// leave seams.
+function drawWet(step, brush, to, time) {
+  const ctx = wetCtx, points = brush.points;
+  const edge = (p, offset) => {
+    const ragged = Math.abs(offset) > 0.99 ? 1 + 0.12 * (noise1(p.u * 70 + offset * 13) - 0.5) : 1;
+    const o = offset * ragged * p.w / 2;
+    return [(p.x + p.nx * o) * WET_SCALE, (p.y + p.ny * o) * WET_SCALE];
+  };
+  for (let start = brush.wetDrawn; start < to; start += 16) {
+    const end = Math.min(start + 17, to), u = points[start].u;
+    for (let k = 0; k < BANDS; k++) {
+      const o0 = -1 + (2 * k) / BANDS, o1 = o0 + 2 / BANDS + 0.02;
+      const t = clamp01(((o0 + o1) / 2 * step.side + 1) / 2);
+      const amount = step.wet * inkAt(step, t, u);
+      const red = step.red[0] + (step.red[1] - step.red[0]) * t;
+      ctx.fillStyle = rgb([amount * 255 / 1.1, (time / WET_CLOCK) * 255, red * 255]);
+      ctx.beginPath();
+      for (let i = start; i <= end; i++) ctx.lineTo(...edge(points[i], o0));
+      for (let i = end; i >= start; i--) ctx.lineTo(...edge(points[i], o1));
+      ctx.fill();
+    }
+  }
+  brush.wetDrawn = Math.max(to - 1, 0);
+}
+
+// Where the brush rests, ink pools and dries with a darker rim.
+function pool(x, y, r, amount, red, time, random) {
+  marksCtx.globalCompositeOperation = 'multiply';
+  marksCtx.beginPath();
+  for (let i = 0; i < 24; i++) {
+    const a = (i / 24) * Math.PI * 2, k = r * (0.92 + random() * 0.16);
+    marksCtx.lineTo(x + Math.cos(a) * k, y + Math.sin(a) * k);
+  }
+  marksCtx.closePath();
+  marksCtx.strokeStyle = rgb(INK.map((c, i) => c + ([255, 90, 50][i] - c) * red));
+  marksCtx.globalAlpha = 0.22;
+  marksCtx.lineWidth = Math.max(1, r * 0.12);
+  marksCtx.stroke();
+  wetCtx.fillStyle = rgb([Math.min(amount, 1.1) * 255 / 1.1, (time / WET_CLOCK) * 255, red * 255]);
+  wetCtx.beginPath();
+  wetCtx.arc(x * WET_SCALE, y * WET_SCALE, r * WET_SCALE, 0, Math.PI * 2);
+  wetCtx.fill();
+}
+
+function advanceBrush(step, u, time) {
+  if (!step.brush) step.brush = loadBrush(step, mulberry32(Math.round(step.at * 1000)));
+  const brush = step.brush, points = brush.points, last = points.length - 1;
+  const head = Math.round((step.ease || smooth)(u) * last);
+  const laid = Math.min(time, step.at + step.dur);
+  marksCtx.globalCompositeOperation = 'multiply';
+  marksCtx.lineCap = 'butt';
+  marksCtx.lineJoin = 'round';
+  // Bristles trail the head by a few samples each, so no seam lines up across the stroke.
+  for (const bristle of brush.bristles) {
+    const to = u >= 1 ? last : Math.max(head - bristle.lag, 0);
+    if (to > bristle.drawn) drawBristle(step, brush, bristle, to);
+  }
+  if (step.wet > 0 && head > brush.wetDrawn) drawWet(step, brush, head, laid);
+  const end = step.pool === 'start' ? points[0] : points[last];
+  if (step.pool && (step.pool === 'start' ? !brush.pooled : u >= 1)) {
+    pool(end.x, end.y, end.w * 0.42, step.wet * step.ink[1] * 1.1, step.red[1], laid, mulberry32(last));
+    brush.pooled = true;
+  }
+}
+
+function drawDot(step, time) {
+  const [x, y] = toPixels([step.x, step.y]), random = mulberry32(Math.round(x * y));
+  pool(x, y, step.r * frame.s, 1.1, 0, time, random);
+  marksCtx.fillStyle = rgb(INK);
+  marksCtx.globalAlpha = 0.5;
+  marksCtx.beginPath();
+  marksCtx.arc(x, y, step.r * frame.s * 0.75, 0, Math.PI * 2);
+  marksCtx.fill();
+}
+
+// A square seal carved in relief: white lines cut into the red, abstract rather than
+// legible, with the uneven take of seal paste pressed onto paper.
+function drawSeal(step, random) {
+  const size = Math.round(step.size * frame.s), cell = size / 2;
+  const seal = new OffscreenCanvas(size, size);
+  const ctx = seal.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = rgb(SEAL);
+  ctx.fillRect(size * 0.03, size * 0.03, size * 0.94, size * 0.94);
+  ctx.strokeStyle = '#fff';
+  ctx.lineCap = 'square';
+  ctx.lineWidth = size * 0.055;
+  for (let col = 0; col < 2; col++) {
+    for (let row = 0; row < 2; row++) {
+      const x0 = size * 0.14 + col * cell * 0.88, y0 = size * 0.14 + row * cell * 0.88, span = cell * 0.66;
+      ctx.beginPath();
+      for (let k = 0; k < 3 + Math.floor(random() * 2); k++) {
+        const across = random() < 0.5, at = Math.round(random() * 3) / 3, from = random() * 0.4, to = 0.6 + random() * 0.4;
+        if (across) { ctx.moveTo(x0 + from * span, y0 + at * span); ctx.lineTo(x0 + to * span, y0 + at * span); }
+        else { ctx.moveTo(x0 + at * span, y0 + from * span); ctx.lineTo(x0 + at * span, y0 + to * span); }
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < size * 1.5; i++) {
+    ctx.globalAlpha = random() * 0.7;
+    ctx.fillRect(random() * size, random() * size, 1 + random() * 2, 1 + random() * 2);
+  }
+  const [x, y] = toPixels([step.x, step.y]);
+  marksCtx.globalCompositeOperation = 'multiply';
+  marksCtx.globalAlpha = 0.92;
+  marksCtx.save();
+  marksCtx.translate(x, y);
+  marksCtx.rotate(0.015);
+  marksCtx.drawImage(seal, -size / 2, -size / 2);
+  marksCtx.restore();
+}
+
+function paintUpTo(time) {
+  let warts = 0;
+  for (const step of steps) {
+    if (time < step.at) break;
+    const u = Math.min((time - step.at) / step.dur, 1);
+    if (step.type === 'warts') warts = u * 14;
+    if (step.done) continue;
+    if (step.type === 'brush') advanceBrush(step, u, time);
+    else if (step.type === 'dot') drawDot(step, time);
+    else if (step.type === 'seal') drawSeal(step, mulberry32(cycle + 11));
+    step.done = u >= 1 || step.type !== 'brush';
+    dirty = true;
+  }
+  return warts;
+}
+
+function render(ms) {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    resize(w, h);
+  }
+  const time = ms / 1000;
+  if (Math.floor(time / CYCLE) !== cycle) {
+    cycle = Math.floor(time / CYCLE);
+    startCycle(cycle);
+  }
+  const t = time % CYCLE;
+  gl.uniform1f(uniform('uWarts'), paintUpTo(t));
+  if (dirty) {
+    upload(0, marks);
+    upload(1, wet);
+    dirty = false;
+  }
+  gl.uniform1f(uniform('uTime'), t);
+  gl.uniform1f(uniform('uFade'), smooth(clamp01((t - CYCLE + FADE) / FADE)));
+  gl.viewport(0, 0, w, h);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

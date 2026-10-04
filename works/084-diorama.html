@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diorama</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: radial-gradient(80% 70% at 45% 38%, #a9b0ac, #737c79 60%, #474f4d); }
+  .scene { position: absolute; left: 50%; top: 50%; transform-style: preserve-3d; }
+  .scene div { position: absolute; }
+  .box { transform-style: preserve-3d; will-change: transform; }
+  .layer svg { display: block; width: 100%; height: 100%; }
+  .side { backface-visibility: hidden; }
+  .shade::after { content: ''; position: absolute; inset: 0; background: rgb(12 16 14 / var(--dim, 0)); }
+  .frame { box-sizing: border-box; border-style: solid; }
+  .wall-shadow { background: rgb(30 36 34 / 0.45); }
+  .moon { transform-origin: 50% 0; background: linear-gradient(#35352d, #35352d) 50% 0 / 1px 100% no-repeat; }
+  .moon div {
+    left: 0; bottom: 0; width: 100%; aspect-ratio: 1; border-radius: 50%;
+    background: radial-gradient(circle at 38% 34%, #f6efda, #e6dbbb 70%, #d4c7a2);
+  }
+  .moon-shadow, .firefly { border-radius: 50%; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position: absolute">
+  <defs>
+    <linearGradient id="sky" x1="0" x2="0" y1="0" y2="1000" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8e9fa3"/>
+      <stop offset="0.5" stop-color="#c6c5ae"/>
+      <stop offset="0.75" stop-color="#e6cea1"/>
+      <stop offset="1" stop-color="#e0bd8b"/>
+    </linearGradient>
+    <radialGradient id="cap" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6e130b"/>
+      <stop offset="1" stop-color="#b8321a"/>
+    </radialGradient>
+    <linearGradient id="stem" x1="-150" x2="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f4f0e4"/>
+      <stop offset="1" stop-color="#d3c9b2"/>
+    </linearGradient>
+    <!-- Paper fibre, clipped to whatever shape it is drawn with. -->
+    <filter id="grain" x="0" y="0" width="1" height="1">
+      <feTurbulence type="fractalNoise" baseFrequency="0.7" numOctaves="2" seed="7"/>
+      <feColorMatrix values="0 0 0 0 0.2  0 0 0 0 0.22  0 0 0 0 0.16  0.5 0 0 0 -0.2"/>
+      <feComposite in2="SourceGraphic" operator="in"/>
+    </filter>
+  </defs>
+</svg>
+<div class="scene"><div class="wall-shadow"></div><div class="box"></div></div>
+<script type="module">
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const clamp01 = (v) => Math.min(Math.max(v, 0), 1);
+const ease = (v) => v * v * (3 - 2 * v);
+const mix = (a, b, k) => a + (b - a) * k;
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const normalize = (v) => v.map((c) => c / Math.hypot(...v));
+const fixed = (v) => v.toFixed(1);
+const hash = (n) => {
+  const s = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return s - Math.floor(s);
+};
+
+// CSS axes: y points down, z towards the viewer. The room light only reaches the outside of the box.
+const LIGHT = normalize([-0.4, -0.65, 0.65]);
+const SHEEN = normalize([LIGHT[0], LIGHT[1], LIGHT[2] + 2]);
+// A lamp hidden behind the top of the frame throws every cut-out's shadow down and a little right.
+const LAMP_SHIFT = [0.22, 0.55];
+// Art units: the opening is 1000 tall, y runs down from its top edge, z runs forward from the back wall.
+const DEPTH = 550;
+const MOON = { z: 125, reach: 170, radius: 44 };
+
+// ---- Canonical mushroom, in its own units (x1000, y up) ----
+
+const STEM = 'M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z';
+const RING = 'M-74 -660 L118 -660 Q141 -604 145 -555 Q15 -536 -115 -555 Q-110 -604 -74 -660 Z';
+const GILLS = 'M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z';
+const CAP = 'M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z';
+const SPOTS = [
+  [12, -1070, 30, 24], [202, -1050, 26, 21], [-188, -1030, 28, 22], [362, -990, 30, 24], [-348, -960, 24, 19],
+  [92, -990, 34, 27], [-88, -940, 22, 18], [252, -930, 25, 20], [472, -900, 20, 16], [-438, -880, 18, 14],
+  [-248, -890, 26, 21], [132, -880, 20, 16], [372, -875, 17, 14], [-28, -880, 16, 13],
+].map(([x, y, rx, ry]) => `M${x - rx} ${y} a${rx} ${ry} 0 1 0 ${2 * rx} 0 a${rx} ${ry} 0 1 0 ${-2 * rx} 0 Z`).join(' ');
+
+function mushroom(x, ground, scale, parts) {
+  const transform = `translate(${fixed(x - 20 * scale)} ${ground}) scale(${scale.toFixed(3)})`;
+  const pieces = {
+    stem: [{ d: STEM, fill: 'url(#stem)' }, { d: RING, fill: '#ddd5c2' }],
+    cap: [{ d: GILLS, fill: '#d2c6ad' }, { d: CAP, fill: 'url(#cap)' }, { d: SPOTS, fill: '#efe7d6' }],
+  };
+  return parts.flatMap((part) => pieces[part]).map((shape) => ({ ...shape, transform }));
+}
+
+// ---- Scenery, generated across the visible half-width hw ----
+
+// Six tiers of boughs; the outline runs down the right side and back up the left.
+function conifer(x, base, height, width) {
+  const step = height / 6;
+  const tiers = [1, 2, 3, 4, 5, 6].map((i) => ({ y: base - height + i * step, reach: (width * i) / 6 }));
+  const tip = ({ y, reach }, side) => `L${fixed(x + side * reach)} ${fixed(y)}`;
+  const notch = ({ y, reach }, side) => `L${fixed(x + side * reach * 0.6)} ${fixed(y - step * 0.45)}`;
+  const right = tiers.map((tier, i) => `${i ? notch(tier, 1) : ''} ${tip(tier, 1)}`);
+  const left = tiers.map((tier, i) => `${tip(tier, -1)} ${i ? notch(tier, -1) : ''}`).reverse();
+  return `M${fixed(x)} ${fixed(base - height)} ${right.join(' ')} ${left.join(' ')} Z`;
+}
+
+function ground(hw, height) {
+  let d = `M${-hw - 60} 1000`;
+  for (let x = -hw - 60; x <= hw + 60; x += 40) d += ` L${x} ${fixed(height(x))}`;
+  return `${d} L${hw + 60} 1000 Z`;
+}
+
+function forest(hw, spacing, seed, tree) {
+  let d = '';
+  for (let x = -hw - 40, i = 0; x < hw + 40; x += spacing, i++) d += tree(x + (hash(seed + i) - 0.5) * spacing * 0.6, hash(seed + i + 0.5));
+  return d;
+}
+
+function sky(hw) {
+  const cloud = (x, y, length, thickness) => `M${x} ${y} Q${x + length / 2} ${y - thickness} ${x + length} ${y} Q${x + length / 2} ${y + thickness * 0.5} ${x} ${y} Z`;
+  return [
+    { d: `M${-hw - 60} 0 H${hw + 60} V1000 H${-hw - 60} Z`, fill: 'url(#sky)' },
+    { d: `${cloud(-hw * 0.9, 240, hw * 0.9, 34)} ${cloud(hw * 0.05, 330, hw * 0.75, 26)}`, fill: '#c8ccbe' },
+  ];
+}
+
+function farHills(hw) {
+  const ridge = (x) => 640 + 38 * Math.sin(x / 230) + 22 * Math.sin(x / 97 + 1);
+  const trees = forest(hw, 62, 1, (x, r) => conifer(x, ridge(x) + 12, 90 + 80 * r, 30 + 14 * r));
+  return [{ d: `${ground(hw, ridge)} ${trees}`, fill: 'paper' }];
+}
+
+function midForest(hw) {
+  const bank = (x) => 735 + 18 * Math.sin(x / 170 + 2);
+  const trees = forest(hw, 135, 7, (x, r) => conifer(x, bank(x) + 10, 220 + 150 * r, 62 + 30 * r));
+  return [{ d: `${ground(hw, bank)} ${trees}`, fill: 'paper' }];
+}
+
+function nearTrees(hw) {
+  const bank = (x) => 815 - 30 * (Math.abs(x) / hw) ** 2;
+  const trees = [-1, 1].map((side) => `${conifer(side * (hw - 70), bank(hw) + 10, 760, 220)} ${conifer(side * hw * 0.5, bank(hw * 0.5) + 10, 470, 140)}`);
+  return [{ d: `${ground(hw, bank)} ${trees.join(' ')}`, fill: 'paper' }];
+}
+
+function heroBack(hw, size) {
+  const mound = (x) => 872 + 26 * (x / hw) ** 2 - 8 * Math.sin(x / 140);
+  return [{ d: ground(hw, mound), fill: 'paper' }, ...mushroom(0, 885, size, ['stem'])];
+}
+
+function frond(x, base, length, lean) {
+  const point = (t) => [x + lean * length * (0.6 * t * t), base - length * (1.4 * t - 0.55 * t * t)];
+  let d = '';
+  for (let i = 1; i <= 13; i++) {
+    const t = i / 14;
+    const [px, py] = point(t), [qx, qy] = point(t + 0.01);
+    const along = normalize([qx - px, qy - py]), across = [-along[1], along[0]];
+    const reach = length * 0.2 * (1 - t * 0.85), width = reach * 0.22;
+    for (const side of [-1, 1]) {
+      const tip = [px + side * across[0] * reach + along[0] * reach * 0.35, py + side * across[1] * reach + along[1] * reach * 0.35];
+      const mid = [(px + tip[0]) / 2, (py + tip[1]) / 2];
+      d += `M${fixed(px)} ${fixed(py)} Q${fixed(mid[0] + along[0] * width)} ${fixed(mid[1] + along[1] * width)} ${fixed(tip[0])} ${fixed(tip[1])} Q${fixed(mid[0] - along[0] * width)} ${fixed(mid[1] - along[1] * width)} ${fixed(px)} ${fixed(py)} Z `;
+    }
+  }
+  const [ex, ey] = point(1);
+  return `${d}M${x - 4} ${base} Q${fixed(x + lean * length * 0.15)} ${fixed(base - length * 0.6)} ${fixed(ex)} ${fixed(ey)} Q${fixed(x + 4 + lean * length * 0.15)} ${fixed(base - length * 0.6)} ${x + 4} ${base} Z`;
+}
+
+function fern(x, base, size, side) {
+  return [[-0.9, 1], [-0.35, 1.15], [0.25, 1.05], [0.8, 0.85]]
+    .map(([lean, length]) => frond(x, base, size * length, lean * side * 0.8 + side * 0.2)).join(' ');
+}
+
+function undergrowth(hw) {
+  const strip = (x) => 950 + 10 * Math.sin(x / 90);
+  const ferns = `${fern(-hw + 70, 980, 230, 1)} ${fern(hw - 50, 990, 200, -1)}`;
+  return [
+    { d: `${ground(hw, strip)} ${ferns}`, fill: 'paper' },
+    ...mushroom(-hw * 0.62, 955, 0.2, ['stem', 'cap']),
+    ...mushroom(hw * 0.68, 965, 0.14, ['stem', 'cap']),
+  ];
+}
+
+function grass(hw) {
+  let d = `M${-hw - 60} 1000 V985 H${hw + 60} V1000 Z`;
+  for (let i = 0, x = -hw - 50; x < hw + 50; x += 13, i++) {
+    const height = 25 + 150 * (Math.abs(x) / hw) ** 2.2 + 40 * hash(i);
+    const lean = (hash(i + 0.3) - 0.5) * 40;
+    d += ` M${fixed(x - 7)} 1000 Q${fixed(x + lean * 0.4)} ${fixed(1000 - height * 0.6)} ${fixed(x + lean)} ${fixed(1000 - height)} Q${fixed(x + 3)} ${fixed(1000 - height * 0.5)} ${fixed(x + 7)} 1000 Z`;
+  }
+  return [{ d, fill: 'paper' }];
+}
+
+// Back to front. Blur gives the far scenery and the nearest grass a shallow depth of field around the mushroom.
+const LAYERS = [
+  { z: 0, color: [0, 0, 0], blur: 0, art: sky },
+  { z: 80, color: [190, 192, 168], blur: 3.5, art: farHills },
+  { z: 165, color: [138, 156, 138], blur: 2.2, art: midForest },
+  { z: 250, color: [86, 108, 94], blur: 1, art: nearTrees },
+  { z: 326, color: [72, 92, 76], blur: 0, art: heroBack },
+  { z: 356, color: [0, 0, 0], blur: 0, art: (hw, size) => mushroom(0, 885, size, ['cap']) },
+  { z: 430, color: [62, 82, 68], blur: 0.7, art: undergrowth },
+  { z: 500, color: [43, 59, 49], blur: 1.8, art: grass },
+];
+
+// ---- Layer markup: art, lamp shadows from the two cut-outs in front, paper grain ----
+
+const silhouettes = (shapes) => shapes.map(({ d, transform }) => `<path d="${d}"${transform ? ` transform="${transform}"` : ''}/>`).join('');
+
+function paperGradient(index, [r, g, b]) {
+  const tone = (k) => `rgb(${[r, g, b].map((c) => Math.round(Math.min(c * k, 255))).join(' ')})`;
+  return `<linearGradient id="paper-${index}" x1="0" x2="0" y1="300" y2="1000" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="${tone(1.12)}"/><stop offset="1" stop-color="${tone(0.88)}"/></linearGradient>`;
+}
+
+function layerMarkup(index, shapesByLayer, hw) {
+  const layer = LAYERS[index], shapes = shapesByLayer[index];
+  const casters = LAYERS.slice(index + 1, index + 3).map((caster, k) => {
+    const gap = caster.z - layer.z;
+    return `<g transform="translate(${fixed(gap * LAMP_SHIFT[0])} ${fixed(gap * LAMP_SHIFT[1])})">${silhouettes(shapesByLayer[index + 1 + k])}</g>`;
+  });
+  const art = shapes.map(({ d, fill, transform }) =>
+    `<path d="${d}" fill="${fill === 'paper' ? `url(#paper-${index})` : fill}"${transform ? ` transform="${transform}"` : ''}/>`).join('');
+  // The lamp is near the front, so its shadows fade on the deeper layers.
+  const shadowStrength = (0.12 + 0.24 * (layer.z / 360)).toFixed(2);
+  const softness = 6 + 0.06 * (LAYERS[index + 1]?.z - layer.z || 0);
+  return `<svg viewBox="${fixed(-hw)} 0 ${fixed(2 * hw)} 1000">
+    <defs>${paperGradient(index, layer.color)}
+      <clipPath id="cut-${index}">${silhouettes(shapes)}</clipPath>
+      <filter id="lamp-${index}" x="-0.2" y="-0.2" width="1.4" height="1.4"><feGaussianBlur stdDeviation="${softness}"/></filter>
+      <filter id="focus-${index}"><feGaussianBlur stdDeviation="${layer.blur}"/></filter></defs>
+    <g${layer.blur ? ` filter="url(#focus-${index})"` : ''}>${art}
+      <g clip-path="url(#cut-${index})"><g opacity="${shadowStrength}" filter="url(#lamp-${index})">${casters.join('')}</g></g>
+      <g filter="url(#grain)">${silhouettes(shapes)}</g></g></svg>`;
+}
+
+// ---- Build the box ----
+
+const box = document.querySelector('.box');
+const wallShadow = document.querySelector('.wall-shadow');
+let size = {}, moulding, glass, moon, moonShadow, moonPivot, sides = [], fireflies = [];
+
+function plane(className, width, height, transform, background = '') {
+  const element = document.createElement('div');
+  element.className = className;
+  element.style.cssText = `left: ${-width / 2}px; top: ${-height / 2}px; width: ${width}px; height: ${height}px; transform: ${transform}; background: ${background};`;
+  box.append(element);
+  return element;
+}
+
+const depthAt = (z) => (z - DEPTH / 2) * size.unit;
+
+function buildLayers() {
+  const shapesByLayer = LAYERS.map((layer) => layer.art(size.hw, size.mushroom));
+  LAYERS.forEach((layer, index) => {
+    plane('layer', size.width, size.height, `translateZ(${depthAt(layer.z)}px)`).innerHTML = layerMarkup(index, shapesByLayer, size.hw);
+  });
+}
+
+// Inner walls are lit by the lamp above the opening; outer sides only by the room.
+function buildSides() {
+  const { width: w, height: h, unit } = size, d = DEPTH * unit, outerW = w + 2 * size.frame, outerH = h + 2 * size.frame;
+  const lamp = (direction, front, back) => `linear-gradient(to bottom, transparent 30%, rgb(0 0 0 / 0.22)), linear-gradient(${direction}, ${front}, ${back})`;
+  const wood = (direction) => `linear-gradient(${direction}, #4a3324, #3a281b)`;
+  const specs = [
+    { normal: [1, 0, 0], args: [d, h, `translateX(${-w / 2}px) rotateY(90deg)`, lamp('to right', '#66745f', '#3d4840')] },
+    { normal: [-1, 0, 0], args: [d, h, `translateX(${w / 2}px) rotateY(-90deg)`, lamp('to left', '#66745f', '#3d4840')] },
+    { normal: [0, 1, 0], args: [w, d, `translateY(${-h / 2}px) rotateX(-90deg)`, 'linear-gradient(to bottom, #333d36, #283029)'] },
+    { normal: [0, -1, 0], args: [w, d, `translateY(${h / 2}px) rotateX(90deg)`, 'linear-gradient(to top, #5b6852, #3e483b)'] },
+    { normal: [-1, 0, 0], outside: true, args: [d, outerH, `translateX(${-outerW / 2}px) rotateY(-90deg)`, wood('to left')] },
+    { normal: [1, 0, 0], outside: true, args: [d, outerH, `translateX(${outerW / 2}px) rotateY(90deg)`, wood('to right')] },
+    { normal: [0, -1, 0], outside: true, args: [outerW, d, `translateY(${-outerH / 2}px) rotateX(90deg)`, wood('to top')] },
+    { normal: [0, 1, 0], outside: true, args: [outerW, d, `translateY(${outerH / 2}px) rotateX(-90deg)`, wood('to bottom')] },
+  ];
+  sides = specs.map((spec) => ({ ...spec, element: plane('side shade', ...spec.args) }));
+}
+
+function buildMoon() {
+  const { unit, hw } = size;
+  const length = (MOON.reach + MOON.radius) * unit, diameter = 2 * MOON.radius * unit;
+  moonShadow = plane('moon-shadow', diameter, diameter, '', 'rgb(40 44 36 / 0.16)');
+  moonShadow.style.filter = `blur(${14 * unit}px)`;
+  moon = plane('moon', diameter, length, '');
+  moon.style.top = '0';
+  moon.append(document.createElement('div'));
+  moonPivot = [hw * 0.78 * unit, -size.height / 2];
+}
+
+// Out of focus fireflies are larger and softer; the ones near the mushroom stay crisp.
+function buildFireflies() {
+  fireflies = Array.from({ length: 11 }, (_, i) => {
+    const z = 110 + 410 * hash(i * 3.1);
+    const soft = clamp01(Math.abs(z - 340) / 200);
+    const diameter = (64 + 50 * soft) * size.unit, core = 8 - 4 * soft;
+    const glow = `radial-gradient(circle, #fff6d6 0 ${core}%, rgb(255 214 130 / ${0.7 - 0.3 * soft}) ${core + 6}%, rgb(255 192 96 / 0.16) 30%, transparent 68%)`;
+    return { element: plane('firefly', diameter, diameter, '', glow), z, seed: i, home: [hash(i + 0.7) * 1.7 - 0.85, 0.65 * hash(i + 1.9) - 0.4] };
+  });
+}
+
+function build() {
+  const h = innerHeight, w = innerWidth;
+  const height = h * 0.84, frameWidth = height * (w < h ? 0.035 : 0.07);
+  // The front of the box sits nearer than the centre, so leave room for its perspective growth.
+  const width = Math.min(1.25 * height, (0.96 * w) / 1.09 - 2 * frameWidth);
+  const unit = height / 1000, hw = width / unit / 2;
+  size = { height, width, unit, hw, frame: frameWidth, mushroom: Math.min(0.66, (hw - 14) / 560) };
+  document.body.style.perspective = `${3.4 * height}px`;
+  // Keep the fibre about a pixel wide at any size; finer noise aliases into speckle.
+  document.querySelector('#grain feTurbulence').setAttribute('baseFrequency', (0.9 * unit).toFixed(3));
+  box.replaceChildren();
+  buildLayers();
+  buildSides();
+  buildMoon();
+  buildFireflies();
+  glass = plane('glass', width, height, `translateZ(${depthAt(DEPTH - 4)}px)`);
+  moulding = plane('frame', width + 2 * frameWidth, height + 2 * frameWidth, `translateZ(${depthAt(DEPTH)}px)`);
+  moulding.style.borderWidth = `${frameWidth}px`;
+  wallShadow.style.cssText = `left: ${-width / 2 - frameWidth}px; top: ${-height / 2 - frameWidth}px; width: ${width + 2 * frameWidth}px; height: ${height + 2 * frameWidth}px; filter: blur(${height * 0.05}px);`;
+}
+addEventListener('resize', build);
+build();
+
+// ---- Light ----
+
+// Matches CSS `rotateX(ax) rotateY(ay)`.
+function rotate([x, y, z], ax, ay) {
+  const x1 = x * Math.cos(ay) + z * Math.sin(ay);
+  const z1 = -x * Math.sin(ay) + z * Math.cos(ay);
+  return [x1, y * Math.cos(ax) - z1 * Math.sin(ax), y * Math.sin(ax) + z1 * Math.cos(ax)];
+}
+
+const WOOD = [86, 60, 42];
+const BEVELS = [[0, -0.6, 1], [0.6, 0, 1], [0, 0.6, 1], [-0.6, 0, 1]].map(normalize);
+
+function lit(color, normal, ax, ay) {
+  const k = 0.42 + 0.78 * Math.max(dot(rotate(normal, ax, ay), LIGHT), 0);
+  return `rgb(${color.map((c) => Math.round(c * k)).join(' ')})`;
+}
+
+// The moulding slopes outward on each side, so the four borders catch the room light differently.
+function lightFrame(ax, ay) {
+  moulding.style.borderColor = BEVELS.map((normal) => lit(WOOD, normal, ax, ay)).join(' ');
+}
+
+function lightSides(ax, ay) {
+  for (const side of sides) {
+    const facing = Math.max(dot(rotate(side.normal, ax, ay), LIGHT), 0);
+    const dim = side.outside ? 0.5 - 0.65 * facing : 0.12 - 0.2 * facing;
+    side.element.style.setProperty('--dim', dim.toFixed(3));
+  }
+}
+
+function lightGlass(ax, ay) {
+  const normal = rotate([0, 0, 1], ax, ay);
+  const glint = clamp01((dot(normal, SHEEN) - 0.92) / 0.08) ** 2;
+  const band = 50 - 200 * ((normal[0] - SHEEN[0]) * 0.6 + (normal[1] - SHEEN[1]) * 0.8);
+  const wash = clamp01((LIGHT[2] - dot(normal, LIGHT)) * 1.4);
+  glass.style.background = `linear-gradient(118deg, transparent ${fixed(band - 14)}%, rgb(255 253 244 / ${(0.05 + 0.13 * glint).toFixed(3)}) ${fixed(band)}%, transparent ${fixed(band + 14)}%), rgb(20 26 22 / ${wash.toFixed(3)})`;
+}
+
+// Parallel projection of the box outline along the light onto the wall behind it.
+function projectWallShadow(ax, ay, lift) {
+  const across = rotate([1, 0, 0], ax, ay), down = rotate([0, 1, 0], ax, ay);
+  const flatten = (v) => [v[0] - (LIGHT[0] * v[2]) / LIGHT[2], v[1] - (LIGHT[1] * v[2]) / LIGHT[2]];
+  const [ux, uy] = flatten(across), [vx, vy] = flatten(down);
+  const wall = -(DEPTH * size.unit) / 2 - 0.3 * size.height;
+  const tx = (LIGHT[0] / LIGHT[2]) * wall, ty = lift + (LIGHT[1] / LIGHT[2]) * wall;
+  wallShadow.style.transform = `matrix3d(${ux}, ${uy}, 0, 0, ${vx}, ${vy}, 0, 0, 0, 0, 1, 0, ${tx}, ${ty}, ${wall}, 1)`;
+}
+
+// ---- Motion ----
+
+const POSES = [[-0.05, 0.2], [0.03, -0.16], [-0.07, 0.03], [0.02, 0.24], [-0.03, -0.21]];
+const REACH = calm ? 0.5 : 1;
+const HOLD = calm ? 9 : 5.6, GLIDE = calm ? 5.5 : 3.6, WIND_UP = 0.7;
+
+function pose(t) {
+  const step = Math.floor(t / HOLD);
+  const phase = t - step * HOLD;
+  const cycle = (i) => POSES[((i % POSES.length) + POSES.length) % POSES.length];
+  const from = cycle(step - 1), to = cycle(step);
+  // Anticipation: the box eases slightly away before swinging to the next view.
+  const back = calm ? 0 : 0.15 * ease(clamp01(phase / WIND_UP));
+  const glide = ease(clamp01((phase - (calm ? 0 : WIND_UP)) / GLIDE));
+  return from.map((value, k) => REACH * mix(value - back * (to[k] - value), to[k], glide));
+}
+
+const turnRate = (t) => (pose(t)[1] - pose(t - 0.05)[1]) / 0.05;
+
+// The hanging moon lags the box's turns, then swings back once before settling.
+function swingMoon(t) {
+  const angle = -0.8 * (turnRate(t - 0.35) - 0.45 * turnRate(t - 1.5));
+  const { unit } = size, [px, py] = moonPivot;
+  moon.style.transform = `translate3d(${px}px, ${py}px, ${depthAt(MOON.z)}px) rotate(${angle}rad)`;
+  const length = MOON.reach * unit, gap = MOON.z * unit;
+  const cx = px - length * Math.sin(angle) + gap * LAMP_SHIFT[0], cy = py + length * Math.cos(angle) + gap * LAMP_SHIFT[1];
+  moonShadow.style.transform = `translate3d(${cx}px, ${cy}px, ${depthAt(2)}px)`;
+}
+
+function blink(phase) {
+  const flash = clamp01(1 - Math.abs(phase - 0.5) / 0.22);
+  return 0.12 + 0.88 * ease(flash);
+}
+
+function flyFireflies(t) {
+  const { width, height, unit } = size, pace = calm ? 0.45 : 1;
+  for (const fly of fireflies) {
+    const s = fly.seed, time = t * pace;
+    const x = (fly.home[0] + 0.1 * Math.sin(time * 0.31 + s * 2.3)) * width / 2;
+    const y = (fly.home[1] + 0.07 * Math.sin(time * 0.43 + s * 1.7) + 0.03 * Math.sin(time * 1.1 + s)) * height;
+    const z = depthAt(fly.z + 30 * Math.sin(time * 0.2 + s));
+    // Flashes travel across the box from left to right, each fly a beat after its neighbour.
+    const phase = (t / (calm ? 7 : 4.2) + 0.35 * fly.home[0] + 0.5 * hash(s + 4.4)) % 1;
+    fly.element.style.transform = `translate3d(${fixed(x)}px, ${fixed(y)}px, ${fixed(z)}px)`;
+    fly.element.style.opacity = (calm ? 0.5 + 0.5 * blink(phase) : blink(phase)).toFixed(3);
+  }
+}
+
+function frame(now) {
+  const t = now / 1000;
+  const [ax, ay] = pose(t);
+  const lift = calm ? 0 : 0.006 * size.height * Math.sin(t * 0.9);
+  box.style.transform = `translateY(${fixed(lift)}px) rotateX(${ax}rad) rotateY(${ay}rad)`;
+  lightFrame(ax, ay);
+  lightSides(ax, ay);
+  lightGlass(ax, ay);
+  projectWallShadow(ax, ay, lift);
+  swingMoon(t);
+  flyFireflies(t);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
