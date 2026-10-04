@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hatching</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #ece3cf; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+
+const vertex = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const fragment = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform float uTime;
+out vec4 outColor;
+
+const vec3 BOUNDS_CENTER = vec3(0.0, 0.56, 0.0);
+const float BOUNDS_RADIUS = 0.82;
+const float TAU = 6.2831853;
+const vec3 PAPER = vec3(0.93, 0.89, 0.8);
+const vec3 INK = vec3(0.14, 0.11, 0.1);
+
+vec3 light;
+
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(vec3(i, 0.0)), hash(vec3(i + vec2(1, 0), 0.0)), f.x),
+             mix(hash(vec3(i + vec2(0, 1), 0.0)), hash(vec3(i + vec2(1, 1), 0.0)), f.x), f.y);
+}
+
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom: ground at y = 0, cap top near y = 1.11, cap about 1.12 wide.
+// Returns distance and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom(vec3 p) {
+  p.x -= 0.05 * p.y * p.y;                       // a slight lean
+  float r = length(p.xz);
+
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43) * 0.8;
+
+  float frill = 0.008 * sin(atan(p.z, p.x) * 9.0);
+  float skirt = abs(r - (0.096 + (0.66 - p.y) * 0.32 + frill * smoothstep(0.64, 0.56, p.y))) - 0.009;
+  float ring = max(skirt, abs(p.y - 0.605) - 0.05) * 0.7;
+
+  vec3 c = p - vec3(0.0, 0.8, 0.0);
+  float dome = sdEllipsoid(c, vec3(0.56, 0.31, 0.56));
+  dome += 0.008 * sin(c.x * 11.0 + 1.3) * sin(c.z * 9.0) * sin(c.y * 7.0 + c.x * 5.0);
+  float under = 0.82 + 0.08 * (1.0 - min(r * r / 0.31, 1.0));
+  float cap = max(dome, under - p.y);
+  float gills = max(dome + 0.02, max(p.y - under - 0.004, under - 0.04 - p.y));
+
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  float body = smin(stem, max(cap, gills), 0.03);
+  if (body < res.x - 0.001) res = vec2(body, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+
+vec3 normalAt(vec3 p) {
+  vec2 e = vec2(0.0015, 0.0);
+  return normalize(vec3(mushroom(p + e.xyy).x - mushroom(p - e.xyy).x,
+                        mushroom(p + e.yxy).x - mushroom(p - e.yxy).x,
+                        mushroom(p + e.yyx).x - mushroom(p - e.yyx).x));
+}
+
+float softShadow(vec3 ro, vec3 rd) {
+  float res = 1.0, t = 0.02;
+  for (int i = 0; i < 40; i++) {
+    float h = mushroom(ro + rd * t).x;
+    res = min(res, 12.0 * h / t);
+    t += clamp(h, 0.01, 0.15);
+    if (res < 0.002 || t > 2.5) break;
+  }
+  return clamp(res, 0.0, 1.0);
+}
+
+// Distance to the nearest wart centre on a jittered grid, in grid cells.
+float warts(vec3 p) {
+  vec3 g = p * 10.0;
+  vec3 i = floor(g), f = fract(g);
+  float d = 1e9;
+  for (int z = -1; z <= 1; z++)
+  for (int y = -1; y <= 1; y++)
+  for (int x = -1; x <= 1; x++) {
+    vec3 o = vec3(x, y, z);
+    vec3 j = o + vec3(hash(i + o), hash(i + o + 7.1), hash(i + o + 3.7));
+    d = min(d, length(j - f) * (0.7 + 0.6 * hash(i + o + 1.3)));
+  }
+  return d;
+}
+
+// Ink coverage of one family of parallel lines. u counts lines; width is the
+// inked fraction of each period, so darker tones swell the lines as a burin does.
+float lines(float u, float du, float width) {
+  float d = abs(fract(u) - 0.5) * 2.0;
+  float aa = du * 2.0 + 0.02;
+  float ink = (1.0 - smoothstep(width - aa, width + aa, d)) * smoothstep(0.0, 0.05, width);
+  return mix(ink, width, smoothstep(0.25, 0.5, du));
+}
+
+// Three families: along the form, across it, then a diagonal for the deepest shade.
+float hatch(float tone, vec2 u, vec2 du) {
+  float w1 = clamp((0.9 - tone) * 1.3, 0.0, 0.8);
+  float w2 = clamp((0.55 - tone) * 1.5, 0.0, 0.7);
+  float w3 = clamp((0.28 - tone) * 2.0, 0.0, 0.6);
+  return max(max(lines(u.x, du.x, w1), lines(u.y, du.y, w2)),
+             lines((u.x + u.y) * 0.7071, (du.x + du.y) * 0.7071, w3));
+}
+
+// Hatch coordinates that follow each part: latitudes and meridians on the cap,
+// rings and fibres on the stem, the lamellae themselves under the cap.
+vec2 strokes(vec3 q, float part, float density, out vec2 du) {
+  float r = length(q.xz);
+  float a1 = atan(q.z, q.x), a2 = atan(-q.z, -q.x);
+  float da = min(fwidth(a1), fwidth(a2));
+  vec2 u;
+  if (part < 0.5) {
+    vec3 c = q - vec3(0.0, 0.8, 0.0);
+    float lat = atan(r / 0.56, c.y / 0.31);
+    float meridians = round(140.0 * density);
+    u = vec2(lat * 52.0 * density, a1 / TAU * meridians);
+    du = vec2(fwidth(u.x), da / TAU * meridians);
+  } else if (part < 1.5) {
+    float lamellae = round(220.0 * density);
+    u = vec2(a1 / TAU * lamellae, r * 60.0 * density);
+    du = vec2(da / TAU * lamellae, fwidth(u.y));
+  } else {
+    float fibres = round(40.0 * density);
+    u = vec2(q.y * 85.0 * density, a1 / TAU * fibres);
+    du = vec2(fwidth(u.x), da / TAU * fibres);
+  }
+  return u;
+}
+
+float toneOf(vec3 p, vec3 n, vec3 q, float part) {
+  float diffuse = max(dot(n, light), 0.0) * softShadow(p + n * 0.004, light);
+  float albedo = part < 0.5 ? mix(0.5, 0.66, smoothstep(0.2, 0.5, length(q.xz)))
+               : part < 1.5 ? 0.62 : 0.95;
+  float under = part > 0.5 ? smoothstep(0.84, 0.6, q.y) * 0.4 + 0.6 : 1.0;
+  return albedo * (0.2 + 0.1 * n.y + 0.85 * diffuse) * under;
+}
+
+vec3 paper(vec2 frag, float scale) {
+  vec2 s = frag / scale;
+  float grain = noise(s * 260.0) * 0.5 + noise(s * 90.0) * 0.5;
+  float fibres = noise(vec2(s.x * 30.0, s.y * 700.0));
+  vec2 uv = frag / uResolution - 0.5;
+  return PAPER * (0.97 + 0.04 * grain - 0.02 * fibres) * (1.0 - 0.18 * dot(uv, uv));
+}
+
+void main() {
+  float scale = min(uResolution.x, uResolution.y);
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / scale;
+  float orbit = uTime * 0.22;
+  light = normalize(vec3(sin(orbit), 0.95, cos(orbit)));
+
+  vec3 target = vec3(0.0, 0.52, 0.0);
+  vec3 ro = target + vec3(sin(0.55), 0.3, cos(0.55)) * 3.5;
+  vec3 fw = normalize(target - ro);
+  vec3 rt = normalize(cross(fw, vec3(0, 1, 0)));
+  vec3 up = cross(rt, fw);
+  vec3 rd = normalize(uv.x * rt + uv.y * up + 2.0 * fw);
+
+  float pixel = 1.0 / (scale * 2.0);       // world size of a pixel at unit distance
+  // Engravers cut fewer, bolder lines for a small plate; keep strokes a few pixels apart.
+  float density = clamp(scale / 900.0, 0.35, 1.0);
+  float ink = 0.0;
+  float hitT = -1.0, part = 0.0, closest = 1e9;
+  vec3 oc = ro - BOUNDS_CENTER;
+  float b = dot(oc, rd);
+  float disc = b * b - dot(oc, oc) + BOUNDS_RADIUS * BOUNDS_RADIUS;
+  if (disc > 0.0) {
+    float t = max(-b - sqrt(disc), 0.0), tEnd = -b + sqrt(disc);
+    for (int i = 0; i < 100; i++) {
+      vec2 m = mushroom(ro + rd * t);
+      closest = min(closest, m.x / t);
+      if (m.x < 0.0005 * t) { hitT = t; part = m.y; break; }
+      t += m.x * 0.9;
+      if (t > tEnd) break;
+    }
+  }
+
+  if (hitT > 0.0) {
+    vec3 p = ro + rd * hitT;
+    vec3 n = normalAt(p);
+    vec3 q = p; q.x -= 0.05 * q.y * q.y;
+    float tone = toneOf(p, n, q, part);
+    vec2 du;
+    vec2 u = strokes(q, part, density, du);
+    // A slight tremor in the burin keeps the lines from looking ruled.
+    u += (noise(gl_FragCoord.xy / scale * 30.0) - 0.5) * 0.12;
+    ink = hatch(tone, u, du);
+    if (part < 0.5 && n.y > -0.1) {
+      float w = warts(q - vec3(0.0, 0.8, 0.0));
+      float rim = fwidth(w) * 1.2 + 0.015;
+      float inside = 1.0 - smoothstep(0.22, 0.22 + rim, w);
+      ink = mix(ink, hatch(tone + 0.45, u, du) * 0.8, inside);
+      ink = max(ink, 1.0 - smoothstep(rim * 0.6, rim * 1.4, abs(w - 0.235)));
+    }
+    // Contour: thicken where the surface turns away from the eye.
+    float facing = abs(dot(n, rd));
+    ink = max(ink, 1.0 - smoothstep(0.12, 0.24, facing));
+  } else {
+    // Silhouette from the ray's closest approach, then the ground below.
+    ink = 1.0 - smoothstep(pixel * 1.6, pixel * 3.2, closest);
+    if (rd.y < 0.0) {
+      vec3 g = ro - rd * ro.y / rd.y;
+      float shade = 1.0 - softShadow(g, light);
+      float contact = exp(-max(length(g.xz) - 0.14, 0.0) * 9.0) * 0.6;
+      float tone = 1.0 - max(shade * 0.7, contact);
+      // The plate's ground is an oval patch; lines thin out towards its edge.
+      float vignette = smoothstep(1.0, 0.35, length(g.xz * vec2(0.8, 1.0)));
+      float y = gl_FragCoord.y / scale * 150.0 * density + (noise(gl_FragCoord.xy / scale * vec2(8.0, 40.0)) - 0.5) * 0.4;
+      float du = fwidth(y);
+      ink = max(ink, lines(y, du, clamp((0.95 - tone) * 1.1, 0.0, 0.75) * vignette));
+    }
+  }
+
+  float grain = noise(gl_FragCoord.xy / scale * 400.0);
+  ink *= 0.85 + 0.15 * grain;
+  vec3 col = mix(paper(gl_FragCoord.xy, scale), INK, ink * 0.92);
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+gl.linkProgram(program);
+gl.useProgram(program);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const position = gl.getAttribLocation(program, 'position');
+gl.enableVertexAttribArray(position);
+gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+
+const uResolution = gl.getUniformLocation(program, 'uResolution');
+const uTime = gl.getUniformLocation(program, 'uTime');
+
+function frame(ms) {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    gl.viewport(0, 0, w, h);
+  }
+  gl.uniform2f(uResolution, w, h);
+  gl.uniform1f(uTime, ms / 1000);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

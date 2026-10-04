@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spore Print</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #6a5541; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const ctx = canvas.getContext('2d');
+
+// Seen from above, the cap of the canonical mushroom is a disc 1.12 wide.
+// Everything below is in those units, centred on the cap.
+const CAP_R = 0.56;
+const PAPER = 1.45;
+const TILT = -0.06;
+
+// One spore print per cycle, in seconds: the cap is set down, rests while
+// spores fall, is lifted away, and the print fades before the next cap.
+const CYCLE = 26;
+const SET_DOWN = 2.5, LIFT = 14, LIFTED = 17.5, FADE = 23;
+
+const smoothstep = (a, b, v) => {
+  const t = Math.min(Math.max((v - a) / (b - a), 0), 1);
+  return t * t * (3 - 2 * t);
+};
+
+// The print lives on a fixed square texture over the paper, so it survives
+// resizes and keeps the same grain at every viewport size.
+const PRINT_SIZE = 2048;
+const print = new OffscreenCanvas(PRINT_SIZE, PRINT_SIZE);
+const printCtx = print.getContext('2d');
+const toPrint = (v) => (v / PAPER + 0.5) * PRINT_SIZE;
+
+// Spores fall between the gills, so the print is white in the gaps and dark
+// along each gill edge. Full gills run from the stem; shorter ones start
+// partway out and fill in toward the rim. Angles are sorted and jittered.
+function makeGills() {
+  const count = 60 + Math.floor(Math.random() * 3) * 8;
+  const step = Math.PI * 2 / (count * 4);
+  const angles = new Float32Array(count * 4), starts = new Float32Array(count * 4);
+  for (let i = 0; i < count * 4; i++) {
+    angles[i] = (i + (Math.random() - 0.5) * 0.5) * step;
+    starts[i] = i % 4 === 0 ? 0 : i % 2 === 0 ? 0.26 + Math.random() * 0.1 : 0.4 + Math.random() * 0.08;
+  }
+  return { angles, starts, step, twist: Math.random() * Math.PI * 2 };
+}
+
+const GILL_EDGE = 0.0012;
+
+// Distance along the arc from angle theta to the nearest gill present at radius r.
+function gillDistance(r, theta, gills) {
+  const { angles, starts, step } = gills;
+  const n = angles.length;
+  const angle = (i) => angles[(i + n) % n] + Math.floor(i / n) * Math.PI * 2;
+  let left = Math.floor(theta / step);
+  if (angle(left) > theta) left--;
+  else if (angle(left + 1) <= theta) left++;
+  let right = left + 1;
+  while (starts[(left + n) % n] > r) left--;
+  while (starts[right % n] > r) right++;
+  return r * Math.min(theta - angle(left), angle(right) - theta);
+}
+
+function deposit(grains, gills) {
+  const path = new Path2D();
+  for (let i = 0; i < grains; i++) {
+    let r, theta = Math.random() * Math.PI * 2;
+    if (Math.random() < 0.05) {
+      // A few escape under the rim and settle in a soft halo.
+      r = CAP_R - 0.03 - Math.log(Math.random()) * 0.05;
+    } else {
+      r = Math.sqrt(0.01 + Math.random() * (CAP_R * CAP_R - 0.01));
+      if (Math.random() > 0.3 + 0.7 * smoothstep(0.1, 0.2, r) * smoothstep(0.59, 0.42, r)) continue;
+      if (Math.random() > smoothstep(GILL_EDGE, GILL_EDGE * 2, gillDistance(r, theta, gills))) continue;
+      // Gills sweep a little as they run to the rim.
+      theta += gills.twist + 0.04 * Math.sin(r * 7);
+    }
+    const size = 1 + Math.random() * 1.2;
+    path.rect(toPrint(r * Math.cos(theta)), toPrint(r * Math.sin(theta)), size, size);
+  }
+  printCtx.fill(path);
+}
+
+// The cap seen from above: dark crown, red rim, a striate margin and
+// irregular cream warts that crowd toward the centre.
+function renderCap() {
+  const size = 1024, span = 1.24;
+  const image = new OffscreenCanvas(size, size);
+  const c = image.getContext('2d');
+  c.setTransform(size / span, 0, 0, size / span, size / 2, size / 2);
+
+  const skin = c.createRadialGradient(-0.04, -0.05, 0, 0, 0, CAP_R);
+  skin.addColorStop(0, '#6e130b');
+  skin.addColorStop(0.55, '#8f1e10');
+  skin.addColorStop(1, '#b8321a');
+  c.fillStyle = skin;
+  c.beginPath();
+  c.arc(0, 0, CAP_R, 0, Math.PI * 2);
+  c.fill();
+  c.save();
+  c.clip();
+
+  c.strokeStyle = 'rgba(70, 10, 4, 0.35)';
+  c.lineWidth = 0.0025;
+  for (let i = 0; i < 180; i++) {
+    const a = i / 180 * Math.PI * 2 + Math.random() * 0.01;
+    const r0 = CAP_R - 0.03 - Math.random() * 0.04;
+    c.beginPath();
+    c.moveTo(r0 * Math.cos(a), r0 * Math.sin(a));
+    c.lineTo(CAP_R * Math.cos(a), CAP_R * Math.sin(a));
+    c.stroke();
+  }
+
+  const warts = [];
+  for (let tries = 0; warts.length < 75 && tries < 4000; tries++) {
+    const r = 0.5 * Math.pow(Math.random(), 0.8), a = Math.random() * Math.PI * 2;
+    const x = r * Math.cos(a), y = r * Math.sin(a);
+    const radius = 0.01 + 0.022 * (1 - r / CAP_R) * (0.5 + Math.random() * 0.5);
+    if (warts.every((w) => Math.hypot(w.x - x, w.y - y) > (w.radius + radius) * 1.25)) warts.push({ x, y, radius });
+  }
+  for (const [color, dx] of [['rgba(45, 6, 2, 0.45)', 0.006], ['#efe7d6', 0]]) {
+    c.fillStyle = color;
+    for (const w of warts) {
+      c.beginPath();
+      for (let k = 0; k < 7; k++) {
+        const a = k / 7 * Math.PI * 2, rr = w.radius * (0.75 + 0.4 * Math.random());
+        c.lineTo(w.x + dx + rr * Math.cos(a), w.y + dx + rr * Math.sin(a));
+      }
+      c.fill();
+    }
+  }
+
+  // Light from the upper left over a domed surface.
+  const light = c.createLinearGradient(-CAP_R, -CAP_R, CAP_R, CAP_R);
+  light.addColorStop(0, 'rgba(255, 210, 170, 0.16)');
+  light.addColorStop(0.5, 'rgba(255, 210, 170, 0)');
+  light.addColorStop(1, 'rgba(30, 4, 0, 0.3)');
+  c.fillStyle = light;
+  c.fillRect(-CAP_R, -CAP_R, 2 * CAP_R, 2 * CAP_R);
+  c.restore();
+  c.strokeStyle = 'rgba(40, 6, 2, 0.5)';
+  c.lineWidth = 0.004;
+  c.beginPath();
+  c.arc(0, 0, CAP_R - 0.002, 0, Math.PI * 2);
+  c.stroke();
+  return { image, span };
+}
+
+// Table and the half-black, half-white paper mycologists use, so that both
+// pale and dark spores show. This one's spores are white.
+function renderBase(w, h, s) {
+  const base = new OffscreenCanvas(w, h);
+  const c = base.getContext('2d');
+  const table = c.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.hypot(w, h) / 2);
+  table.addColorStop(0, '#7a6550');
+  table.addColorStop(1, '#4f3e2f');
+  c.fillStyle = table;
+  c.fillRect(0, 0, w, h);
+  c.setTransform(s, 0, 0, s, w / 2, h / 2);
+  c.rotate(TILT);
+  c.shadowColor = 'rgba(25, 15, 8, 0.5)';
+  c.shadowBlur = 0.03 * s;
+  c.shadowOffsetY = 0.012 * s;
+  c.fillStyle = '#1c1b1a';
+  c.fillRect(-PAPER / 2, -PAPER / 2, PAPER, PAPER);
+  c.shadowColor = 'transparent';
+  c.fillStyle = '#ebe6da';
+  c.fillRect(0, -PAPER / 2, PAPER / 2, PAPER);
+  return base;
+}
+
+let view, base, cycle = -1, gills, cap;
+printCtx.fillStyle = 'rgba(255, 253, 246, 0.2)';
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width === w && canvas.height === h) return;
+  canvas.width = w;
+  canvas.height = h;
+  view = { w, h, s: Math.min(w, h) * 0.9 / PAPER };
+  base = renderBase(w, h, view.s);
+}
+
+function startCycle() {
+  gills = makeGills();
+  cap = renderCap();
+  printCtx.clearRect(0, 0, PRINT_SIZE, PRINT_SIZE);
+}
+
+function drawPrint(alpha) {
+  const half = PAPER / 2;
+  // White on white barely registers, just as on the real paper.
+  for (const [left, strength] of [[-half, 1], [0, 0.22]]) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(left, -half, half, PAPER);
+    ctx.clip();
+    ctx.globalAlpha = alpha * strength;
+    ctx.drawImage(print, -half, -half, PAPER, PAPER);
+    ctx.restore();
+  }
+}
+
+// lift: 0 resting on the paper, 1 raised toward the viewer and carried off.
+function drawCap(lift) {
+  const away = lift * lift;
+  const shadow = ctx.createRadialGradient(0, 0, CAP_R * 0.7, 0, 0, CAP_R * (1.04 + lift * 0.6));
+  shadow.addColorStop(0, `rgba(10, 6, 4, ${0.7 * (1 - lift) ** 2})`);
+  shadow.addColorStop(1, 'rgba(10, 6, 4, 0)');
+  ctx.save();
+  ctx.translate(away * 0.8, -away * 0.5);
+  ctx.fillStyle = shadow;
+  ctx.fillRect(-1.2, -1.2, 2.4, 2.4);
+  ctx.translate(away * 1.2, -away * 0.8);
+  ctx.scale(1 + 0.4 * lift, 1 + 0.4 * lift);
+  ctx.drawImage(cap.image, -cap.span / 2, -cap.span / 2, cap.span, cap.span);
+  ctx.restore();
+}
+
+let last = performance.now();
+function frame(ms) {
+  const dt = Math.min((ms - last) / 1000, 0.1);
+  last = ms;
+  resize();
+  const t = ms / 1000;
+  if (Math.floor(t / CYCLE) !== cycle) {
+    cycle = Math.floor(t / CYCLE);
+    startCycle();
+  }
+  const u = t % CYCLE;
+  if (u > SET_DOWN && u < LIFT) deposit(Math.round(300000 * dt), gills);
+
+  const { w, h, s } = view;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(base, 0, 0);
+  ctx.setTransform(s, 0, 0, s, w / 2, h / 2);
+  ctx.rotate(TILT);
+  drawPrint(1 - smoothstep(FADE, CYCLE, u));
+  const lift = u < LIFT ? 1 - smoothstep(0, SET_DOWN, u) : smoothstep(LIFT, LIFTED, u);
+  if (lift < 1) drawCap(lift);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

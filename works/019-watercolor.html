@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watercolor</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #f3efe6; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2', { antialias: false });
+if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('EXT_color_buffer_float is required');
+
+// The simulation grid has a fixed short side so the paint behaves the same at every
+// viewport size; the mushroom spans SCALE of it, centred on FOCUS (mushroom units).
+const SIM_SHORT = 600;
+const SCALE = 0.56;
+const FOCUS = [0.03, 0.5];
+const STEPS_PER_SECOND = 180;
+const MAX_STEPS_PER_FRAME = 4;
+const CYCLE = 38, FADE = 2.5;
+
+// Pigments as absorbance per unit of water, from the colour each makes at full strength.
+const pigment = (hex, strength) => {
+  const n = parseInt(hex.slice(1), 16);
+  return [n >> 16, (n >> 8) & 255, n & 255].map((c) => -Math.log(Math.max(c, 4) / 255) * strength);
+};
+const VERMILION = '#d8452a', CRIMSON = '#6f1016', OCHRE = '#d0a050';
+const SIENNA = '#b9783e', SHADOW = '#5f6680', SAP = '#6b8a3a';
+
+const REGION = { cap: 0, stem: 1, gills: 2, ring: 3, ground: 4, groundShadow: 5 };
+
+const vertex = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const common = `#version 300 es
+precision highp float;
+
+float hash(vec2 p) {
+  p = fract(p * vec2(0.1031, 0.1030));
+  p += dot(p, p.yx + 33.33);
+  return fract((p.x + p.y) * p.x);
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+}
+
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 4; i++) { v += a * noise(p); p = p * 2.03 + 17.1; a *= 0.5; }
+  return v;
+}
+
+float sdEllipse(vec2 p, vec2 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom in profile: y up, ground at 0, cap about 1.12 wide, top near 1.11.
+// Returns signed distance (negative inside) and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom2D(vec2 p) {
+  p.x -= 0.05 * p.y * p.y;
+  float r = abs(p.x);
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43);
+  float ring = max(r - 0.096 - (0.66 - p.y) * 0.32, abs(p.y - 0.605) - 0.05);
+  float under = 0.82 + 0.02 * (1.0 - min(r * r / 0.3125, 1.0));
+  float cap = max(sdEllipse(p - vec2(0.0, 0.8), vec2(0.56, 0.31)), under - p.y);
+  float gills = max(r - 0.55, max(p.y - under, 0.8 + 0.015 * (1.0 - min(r * r / 0.27, 1.0)) - p.y));
+  stem = max(stem, -min(cap, gills));
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  if (stem < res.x) res = vec2(stem, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+`;
+
+// Cold-pressed paper: irregular rounded bumps of pressed fibre over a cloudy formation.
+// Green and blue hold a slow swirl that wet paint drifts along; alpha is the fine tooth
+// that granulating pigment settles into.
+const paperFragment = common + `
+out vec4 outColor;
+
+float bumps(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  float d = 1.0;
+  for (int y = -1; y <= 1; y++)
+  for (int x = -1; x <= 1; x++) {
+    vec2 o = vec2(x, y);
+    d = min(d, length(o + vec2(hash(i + o), hash(i + o + 9.7)) - f));
+  }
+  return 1.0 - smoothstep(0.0, 0.9, d);
+}
+
+void main() {
+  vec2 p = gl_FragCoord.xy / ${SIM_SHORT}.0;
+  float h = 0.55 * bumps(p * 95.0) + 0.3 * bumps(p * 170.0 + 3.1) + 0.35 * fbm(p * 35.0);
+  float grain = 0.6 * bumps(p * 240.0 + 7.3) + 0.4 * h;
+  vec2 q = p * 6.0;
+  float e = 0.02, n0 = fbm(q);
+  vec2 curl = vec2(fbm(q + vec2(0, e)) - n0, n0 - fbm(q + vec2(e, 0))) / e;
+  outColor = vec4(clamp((h - 0.15) / 0.9, 0.0, 1.0), curl, clamp(grain, 0.0, 1.0));
+}`;
+
+// One step of a shallow-water pigment model. State: water and suspended pigment
+// (absorbance) per cell; deposit: pigment settled into the paper plus a blurred
+// wetness used to find the drying edge of each wash.
+const stepFragment = common + `
+uniform sampler2D uState;
+uniform sampler2D uDeposit;
+uniform sampler2D uPaper;
+uniform vec2 uTexel;
+uniform vec2 uOrigin;
+uniform float uScale;
+uniform float uSeed;
+uniform int uRegion;
+uniform vec4 uBrushPath;     // segment start and end, mushroom units
+uniform float uBrushRadius;
+uniform float uBrushWater;
+uniform vec3 uBrushPigment;
+uniform float uBrushLoad;
+uniform float uRimSettle;    // off while a wash is being laid, so its bead leaves no seams
+layout(location = 0) out vec4 outState;
+layout(location = 1) out vec4 outDeposit;
+
+const float FLOW = 0.22;        // water exchange between wet neighbours
+const float DIFFUSE = 0.12;     // pigment diffusion within water
+const float RIM = 0.6;          // pigment carried toward the drying rim
+const float EVAPORATE = 0.0011;
+const float SETTLE = 0.0006;
+const float LIFT = 0.0006;
+
+bool inWart(vec2 p) {
+  const vec3 spots[14] = vec3[](
+    vec3(-0.02, 1.07, 0.03), vec3(0.17, 1.05, 0.026), vec3(-0.22, 1.03, 0.028), vec3(0.33, 0.99, 0.03),
+    vec3(-0.38, 0.96, 0.024), vec3(0.06, 0.99, 0.034), vec3(-0.12, 0.94, 0.022), vec3(0.22, 0.93, 0.025),
+    vec3(0.44, 0.9, 0.02), vec3(-0.47, 0.88, 0.018), vec3(-0.28, 0.89, 0.026), vec3(0.1, 0.88, 0.02),
+    vec3(0.34, 0.875, 0.017), vec3(-0.06, 0.88, 0.016));
+  for (int i = 0; i < 14; i++) {
+    vec2 d = p - vec2(spots[i].x + 0.032, spots[i].y);
+    float wobble = 1.0 + 0.25 * (noise(p * 90.0 + float(i)) - 0.5);
+    if (length(d / vec2(1.0, 0.8)) < spots[i].z * 1.15 * wobble) return true;
+  }
+  return false;
+}
+
+// Where the painter lets the brush touch. The edge wavers with the paper tooth,
+// and a hairline of white is left between parts.
+bool region(vec2 p) {
+  vec2 m = mushroom2D(p);
+  float d = m.x + 0.004 * (noise(p * 60.0 + uSeed) - 0.5);
+  if (uRegion == ${REGION.cap}) return m.y == 0.0 && d < -0.003 && !inWart(p);
+  if (uRegion == ${REGION.stem}) return (m.y == 2.0 || m.y == 3.0) && d < -0.002;
+  if (uRegion == ${REGION.gills}) return m.y == 1.0 && d < 0.002;
+  if (uRegion == ${REGION.ring}) return m.y == 3.0 && d < -0.001;
+  float ground = length((p - vec2(0.05, 0.02)) / vec2(0.75, 0.2)) + 0.35 * (fbm(p * 7.0 + uSeed) - 0.5);
+  if (uRegion == ${REGION.ground}) return ground < 1.0 && d > 0.004;
+  float shadow = length((p - vec2(0.3, 0.0)) / vec2(0.3, 0.035)) + 0.2 * (fbm(p * 14.0 + uSeed) - 0.5);
+  return shadow < 1.0 && d > 0.004;
+}
+
+float brush(vec2 p) {
+  if (uBrushRadius <= 0.0) return 0.0;
+  vec2 a = uBrushPath.xy, b = uBrushPath.zw, pa = p - a, ba = b - a;
+  float t = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-8), 0.0, 1.0);
+  float d = length(pa - ba * t) / uBrushRadius;
+  if (d > 1.0 || !region(p)) return 0.0;
+  return smoothstep(1.0, 0.7, d);
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy * uTexel;
+  vec4 here = texture(uState, uv);
+  vec4 deposit = texture(uDeposit, uv);
+  vec4 paperAt = texture(uPaper, uv);
+  float paper = paperAt.r;
+  float w = here.x;
+  float wet = smoothstep(0.02, 0.25, w);
+
+  // Pigment drifts along the swirl, and down a little because the board is tilted.
+  vec2 drift = paperAt.gb * 0.35 + vec2(0.0, -0.08);
+  vec4 upstream = texture(uState, uv - drift * wet * uTexel);
+  vec3 s = mix(here.yzw, upstream.yzw, wet * smoothstep(0.02, 0.25, upstream.x));
+
+  // Water levels out among wet neighbours and carries pigment with it (upwind),
+  // while the pigment also diffuses through the water it is in. Evaporation is fastest
+  // at the rim of a wash, and the outward flow that replaces it carries pigment along:
+  // pigment piles up at the rim, so a dried wash ends in a hard dark line.
+  float dw = 0.0;
+  vec3 ds = vec3(0.0);
+  vec3 c = s / max(w, 1e-4);
+  vec2 offsets[4] = vec2[](vec2(1, 0), vec2(-1, 0), vec2(0, 1), vec2(0, -1));
+  for (int i = 0; i < 4; i++) {
+    vec4 n = texture(uState, uv + offsets[i] * uTexel);
+    float rimward = deposit.a - texture(uDeposit, uv + offsets[i] * uTexel).a;
+    float gate = smoothstep(0.01, 0.06, min(w, n.x));
+    float flux = FLOW * gate * (n.x - w);
+    vec3 cn = n.yzw / max(n.x, 1e-4);
+    dw += flux;
+    ds += flux * (flux > 0.0 ? cn : c) + DIFFUSE * gate * min(w, n.x) * (cn - c);
+    ds += RIM * (rimward < 0.0 ? -rimward * n.yzw * step(0.01, w) : -rimward * s * step(0.01, n.x));
+  }
+  w += dw;
+  s = max(s + ds, 0.0);
+
+  w = max(w - EVAPORATE * (0.85 + 0.3 * paper), 0.0);
+
+  // Pigment settles faster into the valleys of the paper (granulation) and at the
+  // pinned rim of a wash, which diffusion keeps refilling from the inside.
+  float rim = smoothstep(0.8, 0.4, deposit.a);
+  float settle = w < 0.015 ? 1.0 : SETTLE * (0.3 + 2.0 * (1.0 - paperAt.a)) + 0.03 * uRimSettle * rim + 0.04 * smoothstep(0.12, 0.0, w);
+  vec3 settled = s * min(settle, 1.0);
+  vec3 lifted = deposit.rgb * LIFT * smoothstep(0.4, 0.9, w);
+  s += lifted - settled;
+  deposit.rgb += settled - lifted;
+
+  vec2 p = (gl_FragCoord.xy - uOrigin) / uScale;
+  float touch = brush(p) * (0.75 + 0.25 * paper);
+  if (touch > 0.0) {
+    float target = max(w, uBrushWater);
+    w = mix(w, target, touch * 0.6);
+    s = mix(s, uBrushPigment * w, touch * uBrushLoad);
+  }
+
+  vec4 sum = vec4(0.0);
+  for (int i = 0; i < 4; i++) sum += texture(uDeposit, uv + offsets[i] * uTexel);
+  deposit.a = mix(sum.a * 0.25, step(0.03, w), 0.08);
+
+  outState = vec4(w, s);
+  outDeposit = deposit;
+}`;
+
+// Light the paper relief from the upper left and glaze the pigment over it. Wet paint
+// sits a shade darker and catches a little light until it sinks in.
+const displayFragment = common + `
+uniform sampler2D uState;
+uniform sampler2D uDeposit;
+uniform sampler2D uPaper;
+uniform vec2 uResolution;
+uniform vec2 uSimSize;
+uniform float uFade;
+out vec4 outColor;
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uResolution;
+  vec2 texel = 1.0 / uSimSize;
+  vec4 paperAt = texture(uPaper, uv);
+  float h = paperAt.r;
+  vec2 slope = vec2(texture(uPaper, uv + vec2(texel.x, 0)).r - texture(uPaper, uv - vec2(texel.x, 0)).r,
+                    texture(uPaper, uv + vec2(0, texel.y)).r - texture(uPaper, uv - vec2(0, texel.y)).r);
+  float fibre = noise(gl_FragCoord.xy * 0.9) - 0.5;
+  vec3 n = normalize(vec3(-slope * 2.2, 1.0));
+  float light = dot(n, normalize(vec3(-0.5, 0.6, 0.8)));
+  vec3 paper = vec3(0.965, 0.952, 0.92) * (0.94 + 0.07 * light + 0.015 * fibre);
+
+  vec4 state = texture(uState, uv);
+  vec3 pigment = texture(uDeposit, uv).rgb * (0.8 + 0.4 * (1.0 - paperAt.a)) + state.yzw * 0.85;
+  vec3 col = paper * exp(-pigment * (1.0 - uFade));
+  float wet = smoothstep(0.03, 0.4, state.x) * (1.0 - uFade);
+  col *= 1.0 - 0.06 * wet;
+  col += wet * 0.06 * pow(max(light, 0.0), 12.0);
+
+  vec2 c = uv - 0.5;
+  col *= 1.0 - 0.18 * dot(c, c);
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+function program(fragment) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vertex));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fragment));
+  gl.bindAttribLocation(p, 0, 'position');
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const uniforms = {};
+  for (let i = 0; i < gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i++) {
+    const name = gl.getActiveUniform(p, i).name;
+    uniforms[name] = gl.getUniformLocation(p, name);
+  }
+  return { p, u: uniforms };
+}
+
+const paperProgram = program(paperFragment);
+const stepProgram = program(stepFragment);
+const displayProgram = program(displayFragment);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+function texture(w, h, format, internal) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, gl.FLOAT, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+
+function target(w, h) {
+  const state = texture(w, h, gl.RGBA, gl.RGBA16F);
+  const deposit = texture(w, h, gl.RGBA, gl.RGBA16F);
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, state, 0);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, deposit, 0);
+  gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+  return { state, deposit, fbo };
+}
+
+// The painter's plan, in seconds of simulated time. Sweeps lay a wash back and forth
+// over a box; touches drop paint at points; lines draw along a polyline.
+function plan(random) {
+  const jitter = (v, amount) => v + (random() - 0.5) * amount;
+  return [
+    { at: 0, dur: 3.2, region: REGION.cap, water: 1, pigment: pigment(VERMILION, 1.7), load: 0.6,
+      sweep: [-0.56, 0.62, 0.8, 1.13, 6] },
+    { at: 3.4, dur: 2, region: REGION.cap, water: 1, pigment: pigment(CRIMSON, 1.2), load: 0.5, radius: 0.07,
+      touches: [[0.3, 0.98], [0.45, 0.88], [0.15, 1.04], [0.38, 0.93], [-0.05, 1.06]]
+        .map(([x, y]) => [jitter(x, 0.06), jitter(y, 0.03)]) },
+    { at: 5.6, dur: 1.2, region: REGION.cap, water: 1, pigment: pigment(OCHRE, 0.7), load: 0.45, radius: 0.06,
+      touches: [[-0.4, 0.9], [-0.28, 0.98], [-0.15, 1.03]].map(([x, y]) => [jitter(x, 0.05), jitter(y, 0.03)]) },
+    { at: 7, dur: 2.4, region: REGION.stem, water: 0.9, pigment: pigment(OCHRE, 0.15), load: 0.6,
+      sweep: [-0.2, 0.25, 0, 0.8, 9] },
+    { at: 9.5, dur: 1.4, region: REGION.stem, water: 0.9, pigment: pigment(SHADOW, 0.5), load: 0.45, radius: 0.045,
+      line: [[0.12, 0.8], [0.1, 0.5], [0.105, 0.2], [0.15, 0.04]] },
+    { at: 11.2, dur: 2.4, region: REGION.ground, water: 1, pigment: pigment(SAP, 0.3), load: 0.6,
+      sweep: [-0.75, 0.85, -0.18, 0.22, 4] },
+    { at: 13.8, dur: 1.6, region: REGION.ground, water: 1, pigment: pigment(SIENNA, 0.6), load: 0.45, radius: 0.06,
+      touches: [[-0.45, 0.0], [-0.15, -0.06], [0.3, -0.03], [0.6, 0.04]].map(([x, y]) => [jitter(x, 0.1), y]) },
+    { at: 17, dur: 1.6, region: REGION.gills, water: 0.7, pigment: pigment(SIENNA, 0.7), load: 0.6,
+      sweep: [-0.54, 0.6, 0.79, 0.845, 2] },
+    { at: 19, dur: 1.4, region: REGION.stem, water: 0.7, pigment: pigment(SHADOW, 0.7), load: 0.6,
+      sweep: [-0.2, 0.25, 0.68, 0.79, 2] },
+    { at: 20.6, dur: 1, region: REGION.ring, water: 0.7, pigment: pigment(SHADOW, 0.6), load: 0.6,
+      sweep: [-0.2, 0.3, 0.555, 0.6, 1] },
+    { at: 22, dur: 1.6, region: REGION.groundShadow, water: 0.8, pigment: pigment(SHADOW, 0.8), load: 0.6,
+      sweep: [0.0, 0.62, -0.04, 0.04, 2] },
+  ];
+}
+
+// Where the brush is, t seconds into a stroke, and how broad it is.
+function brushAt(stroke, t) {
+  const u = Math.min(Math.max(t / stroke.dur, 0), 1);
+  if (stroke.sweep) {
+    const [x0, x1, y0, y1, rows] = stroke.sweep;
+    const k = Math.min(Math.floor(u * rows), rows - 1), f = u * rows - k;
+    const x = k % 2 ? x1 - f * (x1 - x0) : x0 + f * (x1 - x0);
+    return { x, y: y1 - (k + 0.5) * (y1 - y0) / rows, r: (y1 - y0) / rows * 1.1 };
+  }
+  const points = stroke.touches || stroke.line;
+  const n = stroke.touches ? points.length : points.length - 1;
+  const k = Math.min(Math.floor(u * n), n - 1), f = u * n - k;
+  if (stroke.touches) {
+    return { x: points[k][0], y: points[k][1], r: stroke.radius * Math.min(f * 3, 1) };
+  }
+  const [a, b] = [points[k], points[k + 1]];
+  return { x: a[0] + (b[0] - a[0]) * f, y: a[1] + (b[1] - a[1]) * f, r: stroke.radius };
+}
+
+function mulberry32(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+let sim, paper, targets, strokes, seed, steps = 0, cycle = -1;
+
+function resizeSimulation(aspect) {
+  const w = Math.round(aspect >= 1 ? Math.min(SIM_SHORT * aspect, SIM_SHORT * 2.4) : SIM_SHORT);
+  const h = Math.round(aspect >= 1 ? SIM_SHORT : Math.min(SIM_SHORT / aspect, SIM_SHORT * 2.4));
+  if (sim && sim.w === w && sim.h === h) return;
+  sim = { w, h, scale: SCALE * SIM_SHORT, origin: [w / 2 - FOCUS[0] * SCALE * SIM_SHORT, h / 2 - FOCUS[1] * SCALE * SIM_SHORT] };
+  paper = texture(w, h, gl.RGBA, gl.RGBA16F);
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, paper, 0);
+  gl.viewport(0, 0, w, h);
+  gl.useProgram(paperProgram.p);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  targets = [target(w, h), target(w, h)];
+  cycle = -1;
+}
+
+function startCycle() {
+  for (const t of targets) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+  }
+  seed = (cycle * 7919) % 1000;
+  strokes = plan(mulberry32(cycle + 1));
+}
+
+function step(time) {
+  const dt = 1 / STEPS_PER_SECOND;
+  const stroke = strokes.find((s) => time >= s.at && time < s.at + s.dur);
+  const u = stepProgram.u;
+  const [read, write] = steps % 2 ? [targets[1], targets[0]] : [targets[0], targets[1]];
+  gl.bindFramebuffer(gl.FRAMEBUFFER, write.fbo);
+  gl.viewport(0, 0, sim.w, sim.h);
+  gl.useProgram(stepProgram.p);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, read.state);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, read.deposit);
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, paper);
+  gl.uniform1i(u.uState, 0);
+  gl.uniform1i(u.uDeposit, 1);
+  gl.uniform1i(u.uPaper, 2);
+  gl.uniform2f(u.uTexel, 1 / sim.w, 1 / sim.h);
+  gl.uniform2f(u.uOrigin, ...sim.origin);
+  gl.uniform1f(u.uScale, sim.scale);
+  gl.uniform1f(u.uSeed, seed);
+  gl.uniform1f(u.uRimSettle, stroke && stroke.sweep ? 0 : 1);
+  if (stroke) {
+    const a = brushAt(stroke, time - stroke.at - dt), b = brushAt(stroke, time - stroke.at);
+    gl.uniform1i(u.uRegion, stroke.region);
+    gl.uniform4f(u.uBrushPath, a.x, a.y, b.x, b.y);
+    gl.uniform1f(u.uBrushRadius, b.r);
+    gl.uniform1f(u.uBrushWater, stroke.water);
+    gl.uniform3f(u.uBrushPigment, ...stroke.pigment);
+    gl.uniform1f(u.uBrushLoad, stroke.load);
+  } else {
+    gl.uniform1f(u.uBrushRadius, 0);
+  }
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  steps++;
+}
+
+function display(time, w, h) {
+  const u = displayProgram.u;
+  const current = targets[steps % 2];
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, w, h);
+  gl.useProgram(displayProgram.p);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, current.state);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, current.deposit);
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, paper);
+  gl.uniform1i(u.uState, 0);
+  gl.uniform1i(u.uDeposit, 1);
+  gl.uniform1i(u.uPaper, 2);
+  gl.uniform2f(u.uResolution, w, h);
+  gl.uniform2f(u.uSimSize, sim.w, sim.h);
+  gl.uniform1f(u.uFade, Math.min(Math.max((time % CYCLE - CYCLE + FADE) / FADE, 0), 1));
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+// Simulated time advances with the clock but never more than a few steps per frame,
+// so a slow device paints more slowly rather than skipping strokes.
+let simTime = 0, pending = 0, last = null;
+function frame(ms) {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    resizeSimulation(w / h);
+  }
+  if (cycle < 0) simTime = Math.max(Math.floor(simTime / CYCLE), 0) * CYCLE;
+  const elapsed = last === null ? 0 : Math.min((ms - last) / 1000, 0.1);
+  last = ms;
+  pending = Math.min(pending + elapsed * STEPS_PER_SECOND, MAX_STEPS_PER_FRAME);
+  for (; pending >= 1 || cycle < 0; pending--) {
+    if (Math.floor(simTime / CYCLE) !== cycle) {
+      cycle = Math.floor(simTime / CYCLE);
+      startCycle();
+    }
+    step(simTime % CYCLE);
+    simTime += 1 / STEPS_PER_SECOND;
+  }
+  display(simTime, w, h);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

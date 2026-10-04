@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paper Craft</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: radial-gradient(120% 90% at 40% 30%, #4b4239, #1c1814 75%);
+    perspective: calc(5 * var(--u));
+    perspective-origin: 50% 45%;
+  }
+  .world { position: absolute; left: 50%; top: 56%; transform-style: preserve-3d; }
+  .world > * { position: absolute; left: 0; top: 0; transform-style: preserve-3d; }
+
+  /* A self-healing cutting mat under a desk lamp. */
+  .mat {
+    width: calc(10 * var(--u)); height: calc(13 * var(--u));
+    transform-origin: 0 0;
+    transform: translate(calc(-4.5 * var(--u)), calc(-9 * var(--u)));
+    border-radius: calc(0.12 * var(--u));
+    background:
+      radial-gradient(circle at 38% 61%, rgb(255 236 200 / 0.2), rgb(0 0 0 / 0.35) 55%),
+      linear-gradient(90deg, rgb(206 226 188 / 0.5) calc(0.008 * var(--u)), transparent 0) 0 0 / var(--u) var(--u),
+      linear-gradient(rgb(206 226 188 / 0.5) calc(0.008 * var(--u)), transparent 0) 0 0 / var(--u) var(--u),
+      linear-gradient(90deg, rgb(206 226 188 / 0.2) calc(0.004 * var(--u)), transparent 0) 0 0 / calc(0.2 * var(--u)) calc(0.2 * var(--u)),
+      linear-gradient(rgb(206 226 188 / 0.2) calc(0.004 * var(--u)), transparent 0) 0 0 / calc(0.2 * var(--u)) calc(0.2 * var(--u)),
+      #2c5546;
+  }
+  .shadow {
+    width: calc(6 * var(--u)); height: calc(6 * var(--u));
+    transform-origin: 0 0;
+    transform: translate3d(calc(-2 * var(--u)), calc(-4 * var(--u)), 1px);
+    filter: blur(calc(0.012 * var(--u)));
+    opacity: 0.5;
+  }
+
+  /* Each panel is a card with a printed face, a white face and a core between them,
+     so it shows a thin edge when it turns side-on. */
+  .panel { transform-origin: 0 50%; }
+  .plate { transform-origin: 50% 50%; }
+  .panel > i, .plate > i { position: absolute; inset: 0; clip-path: var(--shape); }
+  .print, .blank { backface-visibility: hidden; }
+  .print {
+    transform: rotateX(180deg) translateZ(calc(0.003 * var(--u)));
+    background: linear-gradient(90deg, var(--t0), var(--t1)), var(--art);
+  }
+  .blank {
+    transform: translateZ(calc(0.003 * var(--u)));
+    background:
+      linear-gradient(90deg, rgb(70 50 30 / var(--ao, 0)), transparent 45%),
+      linear-gradient(90deg, var(--b0), var(--b1)),
+      var(--crease, none),
+      var(--paper, #f1ece1);
+  }
+  .core { background: #cbc2b0; }
+</style>
+</head>
+<body>
+<div class="world">
+  <div class="mat"></div>
+  <svg class="shadow" viewBox="-200 -400 600 600"><path fill="#0c1410"/></svg>
+</div>
+<script type="module">
+const SIDES = 8;
+const HALF = Math.PI / SIDES;
+const THICK = 0.006;
+const LAMP = [-2.4, -1.5, 3.6];
+const CAP_HOME = [1.75, -1.55];
+const CYCLE = 16;
+
+// The fly agaric as a low-poly card model: [radius, height] stations taken from the
+// canonical profile. Each pair of stations becomes one ring of eight panels.
+const STEM = [[0.175, 0], [0.124, 0.14], [0.085, 0.82]];
+const SKIRT = [[0.095, 0.655], [0.13, 0.555]];
+const CAP = [[0.56, 0.82], [0.44, 0.99], [0.24, 1.075], [0, 1.11]];
+
+// Fold schedule in seconds: [fold start, duration, unfold start, duration, stagger per sector].
+const TIMING = {
+  stem: [1.0, 1.0, 13.3, 0.9, 0.1],
+  skirt: [2.8, 0.7, 13.0, 0.4, 0.05],
+  cap: [[3.0, 1.0, 12.3, 0.9, 0.07], [3.35, 0.9, 12.25, 0.9, 0.07], [3.7, 0.8, 12.2, 0.9, 0.07]],
+  flight: [5.4, 1.3, 10.9, 1.2],
+  camera: [4.3, 3.4, 12.0, 3.4],
+};
+
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const world = document.querySelector('.world');
+const shadow = document.querySelector('.shadow path');
+
+const u = (v) => `calc(${v} * var(--u))`;
+const clamp01 = (x) => Math.min(Math.max(x, 0), 1);
+const mix = (a, b, f) => a + (b - a) * f;
+const progress = (t, start, duration) => clamp01((t - start) / duration);
+const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - (2 - 2 * x) ** 3 / 2);
+const hump = (x) => Math.sin(Math.PI * x) ** 2;
+
+let seed = 5;
+function random() {
+  seed = (seed * 16807) % 2147483647;
+  return seed / 2147483647;
+}
+
+function rotateX([x, y, z], angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return [x, y * c - z * s, y * s + z * c];
+}
+
+// One ring of panels between two stations, measured flat along the panel.
+function segment([r0, h0], [r1, h1]) {
+  const da = (r1 - r0) * Math.cos(HALF), dh = h1 - h0;
+  return { length: Math.hypot(da, dh), w0: r0 * Math.sin(HALF), w1: r1 * Math.sin(HALF), angle: Math.atan2(dh, da) };
+}
+
+function rings(stations) {
+  return stations.slice(1).map((station, i) => segment(stations[i], station));
+}
+
+function capColor(r) {
+  const f = clamp01((r - 0.1) / 0.46);
+  return `rgb(${mix(110, 184, f)} ${mix(19, 50, f)} ${mix(11, 26, f)})`;
+}
+
+function card(className, art, paper) {
+  const el = document.createElement('div');
+  el.className = className;
+  el.innerHTML = '<i class="print"></i><i class="core"></i><i class="blank"></i>';
+  el.style.setProperty('--art', art);
+  if (paper) el.style.setProperty('--paper', paper);
+  world.append(el);
+  return el;
+}
+
+function panel(seg, art, paper) {
+  const el = card('panel', art, paper);
+  const wide = Math.max(seg.w0, seg.w1);
+  const y0 = 50 * (1 - seg.w0 / wide), y1 = 50 * (1 - seg.w1 / wide);
+  el.style.width = u(seg.length);
+  el.style.height = u(2 * wide);
+  el.style.marginTop = u(-wide);
+  el.style.setProperty('--shape', `polygon(0 ${y0}%, 100% ${y1}%, 100% ${100 - y1}%, 0 ${100 - y0}%)`);
+  el.style.setProperty('--crease', `repeating-linear-gradient(transparent 0 ${u(0.012)}, #b4aa97 0 ${u(0.024)}) 0 0 / ${u(0.004)} 100% no-repeat`);
+  return el;
+}
+
+function plate(radius, art, paper) {
+  const el = card('plate', art, paper);
+  const corners = [];
+  for (let k = 0; k < SIDES; k++) {
+    const a = (k + 0.5) * 2 * HALF;
+    corners.push(`${50 + 50 * Math.cos(a)}% ${50 + 50 * Math.sin(a)}%`);
+  }
+  el.style.width = el.style.height = u(2 * radius);
+  el.style.margin = u(-radius);
+  el.style.setProperty('--shape', `polygon(${corners.join(',')})`);
+  return el;
+}
+
+function warts(seg, r0, r1, count) {
+  const wide = Math.max(seg.w0, seg.w1);
+  const spots = [];
+  for (let i = 0; i < count; i++) {
+    const along = 0.2 + 0.6 * random();
+    const half = mix(seg.w0, seg.w1, along) / wide;
+    const across = 50 + 50 * half * 0.65 * (2 * random() - 1);
+    const size = 0.018 + 0.014 * random();
+    spots.push(`radial-gradient(${u(size)} ${u(size * 0.85)} at ${along * 100}% ${across}%, #efe7d6 90%, transparent)`);
+  }
+  return [...spots, `linear-gradient(90deg, ${capColor(r0)}, ${capColor(r1)})`].join(',');
+}
+
+const stemRings = rings(STEM);
+const skirtRing = segment(...SKIRT);
+const skirtAt = (SKIRT[0][1] - STEM[1][1]) / (STEM[2][1] - STEM[1][1]);
+const capRings = rings(CAP);
+
+const stemArt = [
+  `repeating-linear-gradient(transparent 0 ${u(0.018)}, rgb(120 100 70 / 0.07) 0 ${u(0.022)}), linear-gradient(90deg, #c4b89e, #e0d9c8)`,
+  `repeating-linear-gradient(transparent 0 ${u(0.018)}, rgb(120 100 70 / 0.07) 0 ${u(0.022)}), linear-gradient(90deg, #e0d9c8, #ece6d8)`,
+];
+const stem = {
+  plate: plate(STEM[0][0], '#c4b89e'),
+  radius: STEM[0][0],
+  rings: stemRings,
+  sectors: Array.from({ length: SIDES }, (_, k) => ({
+    angle: k * 2 * HALF + Math.PI,
+    panels: stemRings.map((seg, i) => panel(seg, stemArt[i])),
+    skirt: panel(skirtRing, '#d9d1be', '#ede6d6'),
+  })),
+};
+const cap = {
+  plate: plate(CAP[0][0], 'repeating-conic-gradient(#d2c6ad 0 3deg, #b8aa8e 0 4deg)',
+    `radial-gradient(circle, transparent ${u(0.082)}, #c9bca8 0 ${u(0.088)}, transparent 0), #f3e6df`),
+  radius: CAP[0][0],
+  rings: capRings,
+  sectors: Array.from({ length: SIDES }, (_, k) => ({
+    angle: k * 2 * HALF + Math.PI / 2,
+    panels: capRings.map((seg, i) => panel(seg, warts(seg, CAP[i][0], CAP[i + 1][0], [3, 2, 1][i]), '#f3e6df')),
+  })),
+};
+
+// How far a fold has gone at time t: rises once, falls once per cycle.
+function folded(t, [start, duration, back, backDuration, stagger], k) {
+  return ease(progress(t, start + stagger * k, duration)) - ease(progress(t, back + stagger * k * 0.5, backDuration));
+}
+
+function capPlacement(t) {
+  const [start, duration, back, backDuration] = TIMING.flight;
+  const go = progress(t, start, duration), ret = progress(t, back, backDuration);
+  const s = ease(go) - ease(ret);
+  const motion = go > 0 && go < 1 ? 1 : ret > 0 && ret < 1 ? -1 : 0;
+  let tilt = -0.22 * Math.sin(Math.PI * (go < 1 ? go : ret)) * motion;
+  if (!calm) {
+    // Rock back before take-off, then settle with a dying wobble after landing.
+    tilt += 0.09 * hump(progress(t, start - 0.4, 0.4)) + 0.09 * hump(progress(t, back - 0.4, 0.4));
+    const landed = t - start - duration;
+    if (landed > 0 && t < back) tilt += 0.08 * Math.exp(-5 * landed) * Math.sin(17 * landed);
+  }
+  const z = mix(2 * THICK, 0.82 + THICK, s) + 0.35 * Math.sin(Math.PI * s) + Math.abs(tilt) * 0.5;
+  return { origin: [CAP_HOME[0] * (1 - s), CAP_HOME[1] * (1 - s), z], tilt };
+}
+
+// Brightness of a face lit by the desk lamp, as an overlay that darkens or warms it.
+function shade(point, normal) {
+  const d = LAMP.map((c, i) => c - point[i]);
+  const dist2 = d[0] ** 2 + d[1] ** 2 + d[2] ** 2;
+  const facing = Math.max((d[0] * normal[0] + d[1] * normal[1] + d[2] * normal[2]) / Math.sqrt(dist2), 0);
+  const b = 0.3 + 0.85 * facing * Math.min(19 / dist2, 1.3);
+  return b < 1 ? `rgb(28 18 10 / ${(1 - b).toFixed(3)})` : `rgb(255 244 222 / ${((b - 1) * 0.7).toFixed(3)})`;
+}
+
+// A face's shadow on the mat, projected from the lamp. Every outline is wound the
+// same way so overlapping shadows merge instead of cancelling.
+function lampShadow(points) {
+  const flat = points.map(([x, y, z]) => {
+    const f = LAMP[2] / (LAMP[2] - z);
+    return [(LAMP[0] + (x - LAMP[0]) * f) * 100, (LAMP[1] + (y - LAMP[1]) * f) * 100];
+  });
+  let area = 0;
+  flat.forEach(([x0, y0], i) => {
+    const [x1, y1] = flat[(i + 1) % flat.length];
+    area += x0 * y1 - x1 * y0;
+  });
+  if (area < 0) flat.reverse();
+  return `M${flat.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join(' L')} Z`;
+}
+
+function light(el, point0, point1, normal) {
+  const back = normal.map((c) => -c);
+  el.style.setProperty('--t0', shade(point0, normal));
+  el.style.setProperty('--t1', shade(point1, normal));
+  el.style.setProperty('--b0', shade(point0, back));
+  el.style.setProperty('--b1', shade(point1, back));
+}
+
+// Lays out one piece: its plate, then each sector's chain of panels hinged edge to edge.
+// Every sector stays in its own vertical plane, so a 2D profile [a, h] describes it.
+function pose(piece, origin, tilt, angles, outlines) {
+  const toWorld = (a, h, side, angle) => {
+    const p = rotateX([a * Math.cos(angle) - side * Math.sin(angle), a * Math.sin(angle) + side * Math.cos(angle), h], tilt);
+    return [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]];
+  };
+  const base = `translate3d(${origin.map((c) => `${c * unit}px`).join(',')}) rotateX(${tilt}rad)`;
+  piece.plate.style.transform = base;
+  light(piece.plate, origin, origin, rotateX([0, 0, -1], tilt));
+  outlines.push(lampShadow(piece.sectors.map((_, k) => toWorld(piece.radius, 0, 0, (k * 2 + 1) * HALF))));
+
+  const place = (el, seg, angle, a, h, psi, crease) => {
+    el.style.transform = `${base} rotateZ(${angle}rad) translate3d(${a * unit}px, 0, ${h * unit}px) rotateY(${-psi}rad)`;
+    el.style.setProperty('--ao', (0.45 * clamp01(crease / 1.6)).toFixed(3));
+    const a1 = a + seg.length * Math.cos(psi), h1 = h + seg.length * Math.sin(psi);
+    const normal = rotateX([Math.sin(psi) * Math.cos(angle), Math.sin(psi) * Math.sin(angle), -Math.cos(psi)], tilt);
+    light(el, toWorld(a, h, 0, angle), toWorld(a1, h1, 0, angle), normal);
+    outlines.push(lampShadow([toWorld(a, h, -seg.w0, angle), toWorld(a1, h1, -seg.w1, angle),
+      toWorld(a1, h1, seg.w1, angle), toWorld(a, h, seg.w0, angle)]));
+    return [a1, h1];
+  };
+
+  piece.sectors.forEach((sector, k) => {
+    let a = piece.radius * Math.cos(HALF), h = 0, psi = 0;
+    sector.panels.forEach((el, i) => {
+      const seg = piece.rings[i];
+      const previous = psi;
+      psi += angles(k, i);
+      const start = [a, h];
+      [a, h] = place(el, seg, sector.angle, a, h, psi, psi - previous);
+      if (sector.skirt && i === 1) {
+        // The ring is a flap cut from the stem, lying folded flat against its outside.
+        const along = seg.length * skirtAt;
+        const sa = start[0] + along * Math.cos(psi) + THICK * Math.sin(psi);
+        const sh = start[1] + along * Math.sin(psi) - THICK * Math.cos(psi);
+        const open = folded(time, TIMING.skirt, k);
+        place(sector.skirt, skirtRing, sector.angle, sa, sh, psi - Math.PI + open * (skirtRing.angle - seg.angle + Math.PI), 0);
+      }
+    });
+  });
+}
+
+let time = 0;
+function stemAngles(k, i) {
+  const f = folded(time, TIMING.stem, k);
+  if (i === 0) return f * stemRings[0].angle;
+  // The long upper panel trails the lift a little, like card on a soft crease.
+  const raw = progress(time, TIMING.stem[0] + TIMING.stem[4] * k, TIMING.stem[1]);
+  return f * (stemRings[1].angle - stemRings[0].angle) - (calm ? 0 : 0.45 * hump(raw));
+}
+
+function capAngles(k, i) {
+  const target = capRings[i].angle - (i ? capRings[i - 1].angle : 0);
+  return folded(time, TIMING.cap[i], k) * target;
+}
+
+let unit = 1;
+function resize() {
+  unit = Math.min(innerHeight * 0.58, innerWidth * 0.66);
+  document.body.style.setProperty('--u', `${unit}px`);
+}
+addEventListener('resize', resize);
+resize();
+
+// The pointer nudges the camera; after a few idle seconds it drifts back.
+let lookX = 0, lookY = 0, aimX = 0, aimY = 0, lastInput = -1e9;
+addEventListener('pointermove', (event) => {
+  aimX = event.clientX / innerWidth - 0.5;
+  aimY = event.clientY / innerHeight - 0.5;
+  lastInput = performance.now();
+});
+
+function camera(t, dt, now) {
+  const [start, duration, back, backDuration] = TIMING.camera;
+  const c = ease(progress(t, start, duration)) - ease(progress(t, back, backDuration));
+  if (now - lastInput > 3000) aimX = aimY = 0;
+  lookX += (aimX - lookX) * Math.min(dt * 3, 1);
+  lookY += (aimY - lookY) * Math.min(dt * 3, 1);
+  const center = [mix(0.85, 0, c), mix(-0.8, 0, c), mix(0, 0.5, c)];
+  const yaw = mix(-0.12, -0.42, c) + (calm ? 0 : 0.18 * Math.sin((t / CYCLE) * Math.PI * 2)) + lookX * 0.8;
+  const tilt = mix(0.55, 1.18, c) - lookY * 0.3;
+  // The flat nets need a wider view than the finished model, more so in portrait.
+  const zoom = mix(0.47 * Math.min(innerWidth / innerHeight / 1.25, 1) ** 0.5, 1, c);
+  world.style.transform = `scale3d(${zoom}, ${zoom}, ${zoom}) rotateX(${tilt}rad) rotateZ(${yaw}rad)
+    translate3d(${-center[0] * unit}px, ${-center[1] * unit}px, ${-center[2] * unit}px)`;
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.1);
+  last = now;
+  time = ((now / 1000) * (calm ? 0.6 : 1)) % CYCLE;
+  const outlines = [];
+  pose(stem, [0, 0, 2 * THICK], 0, stemAngles, outlines);
+  const { origin, tilt } = capPlacement(time);
+  pose(cap, origin, tilt, capAngles, outlines);
+  shadow.setAttribute('d', outlines.join(' '));
+  camera(time, dt, now);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

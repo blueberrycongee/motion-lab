@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spore Paths</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #efd3b2; }
+  svg { position: fixed; inset: 0; width: 100%; height: 100%; }
+  .ink { stroke: #24324d; stroke-width: 6; stroke-linejoin: round; stroke-linecap: round; }
+  .ribbon { fill: none; stroke: #3a5577; stroke-width: 5; stroke-linecap: round; opacity: 0.28; }
+  .gust { fill: none; stroke: #2a4364; stroke-width: 6; stroke-linecap: round; opacity: 0.75; }
+  .spore { fill: #f6ecd6; stroke: #24324d; stroke-width: 2.5; opacity: 0; }
+  .cap-rig { transform-box: view-box; transform-origin: 32px -820px; }
+  .sprout { transform-box: view-box; transform-origin: 560px -3px; scale: 1 0; }
+</style>
+</head>
+<body>
+<svg viewBox="-618 -1340 1300 1560" aria-hidden="true">
+  <defs>
+    <!-- Bokashi: the hand-wiped indigo band at the top of a woodblock sky. -->
+    <linearGradient id="sky" gradientUnits="userSpaceOnUse" x1="0" y1="-2100" x2="0" y2="-700">
+      <stop offset="0" stop-color="#22395a"/>
+      <stop offset="0.38" stop-color="#4f6a88"/>
+      <stop offset="1" stop-color="#efd3b2"/>
+    </linearGradient>
+    <linearGradient id="crown" gradientUnits="userSpaceOnUse" x1="0" y1="-1110" x2="0" y2="-860">
+      <stop offset="0" stop-color="#7c1b0d"/>
+      <stop offset="1" stop-color="#b8321a"/>
+    </linearGradient>
+    <linearGradient id="far" gradientUnits="userSpaceOnUse" x1="0" y1="-270" x2="0" y2="-40">
+      <stop offset="0" stop-color="#5d7290"/>
+      <stop offset="1" stop-color="#d9c3a6"/>
+    </linearGradient>
+    <linearGradient id="moss" gradientUnits="userSpaceOnUse" x1="0" y1="-20" x2="0" y2="220">
+      <stop offset="0" stop-color="#7d8a60"/>
+      <stop offset="1" stop-color="#4f5c3e"/>
+    </linearGradient>
+    <filter id="fibre" x="0" y="0" width="1" height="1">
+      <feTurbulence type="fractalNoise" baseFrequency="0.003 0.04" numOctaves="3" seed="7"/>
+      <feColorMatrix values="0 0 0 0 0.3  0 0 0 0 0.24  0 0 0 0 0.16  0 0 0 -1.4 0.8"/>
+    </filter>
+    <g class="measure"></g>
+  </defs>
+
+  <rect x="-3000" y="-3000" width="6000" height="3200" fill="url(#sky)"/>
+  <path fill="url(#far)" d="M-3000 -90 L-1200 -90 Q-1000 -230 -760 -150 Q-600 -260 -380 -130 Q-200 -90 0 -100 Q300 -210 560 -140 Q760 -270 1000 -120 L3000 -100 V100 H-3000 Z"/>
+  <path class="ink" fill="url(#moss)" d="M-3000 30 L-2000 30 Q0 -40 2000 30 L3000 30 V3000 H-3000 Z"/>
+  <path class="ink" fill="none" d="M-560 -18 Q-570 -90 -610 -130 M-540 -18 Q-520 -100 -480 -150 M880 -6 Q880 -80 920 -130 M900 -4 Q940 -60 1000 -86"/>
+
+  <g class="gusts"></g>
+
+  <path class="ink" fill="#ece5d2" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+  <path class="ink" fill="none" stroke-width="3.5" opacity="0.45" d="M70 -60 Q92 -300 84 -520 M60 -700 Q68 -760 66 -800"/>
+  <path class="ink" fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Q-48 -538 15 -544 Q80 -538 145 -555 Z"/>
+
+  <g class="sprout">
+    <path class="ink" fill="#ece5d2" stroke-width="4" d="M576 -3 Q572 -40 568 -70 L546 -70 Q544 -40 540 -3 Z"/>
+    <path class="ink" fill="#b8321a" stroke-width="4" d="M606 -66 Q600 -122 557 -124 Q514 -122 510 -66 Q558 -76 606 -66 Z"/>
+    <ellipse class="ink" fill="#efe7d6" stroke-width="3" cx="550" cy="-108" rx="8" ry="6"/>
+    <ellipse class="ink" fill="#efe7d6" stroke-width="3" cx="578" cy="-90" rx="6" ry="5"/>
+  </g>
+
+  <g class="spores"></g>
+
+  <g class="cap-rig">
+    <path class="ink" fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+    <path class="ink" fill="none" stroke-width="3" d="M-420 -810 L-400 -830 M-300 -816 L-286 -838 M-180 -820 L-172 -843 M-60 -822 L-56 -846 M60 -823 L60 -846 M180 -821 L186 -844 M300 -817 L310 -840 M420 -811 L434 -832"/>
+    <path class="ink" fill="url(#crown)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+    <path fill="none" stroke="#e98a5c" stroke-width="10" stroke-linecap="round" opacity="0.5" d="M-380 -1000 Q-200 -1090 20 -1100"/>
+    <g class="warts"></g>
+  </g>
+
+  <rect x="-3000" y="-3000" width="6000" height="6000" filter="url(#fibre)" opacity="0.22" style="mix-blend-mode: multiply"/>
+</svg>
+
+<script type="module">
+const SVG = 'http://www.w3.org/2000/svg';
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const PACE = calm ? 2 : 1;
+const PUFF = 4000 * PACE;          // the cap lets go of a cloud of spores once per puff
+const LOOP = 3 * PUFF;             // one of the spores lands and sprouts once per loop
+const SQUEEZE = 0.8;               // fraction of a puff at which the cap squeezes
+const FALL_SPEED = 0.11 / PACE;    // view-box units per millisecond while drifting down
+const WIND_SPEED = 0.36 / PACE;    // and once a wind ribbon has caught it
+const LANDING = [560, -3];
+const easeInOut = 'cubic-bezier(0.45, 0, 0.55, 1)';
+
+// Wind drawn as in a woodblock print: long ribbons that turn over on themselves.
+// The first two pass under the cap and carry the spores; the third crosses the sky.
+const RIBBONS = [
+  [[-1300, -560], [-900, -600], [-500, -660], [-150, -690], [150, -665], [400, -620], [560, -650], [590, -740], [500, -770], [440, -700], [530, -640], [760, -700], [1020, -860], [1300, -980]],
+  [[-1300, -330], [-800, -380], [-350, -420], [50, -470], [330, -450], [490, -380], [450, -290], [350, -320], [380, -420], [580, -500], [850, -640], [1300, -760]],
+  [[-1300, -1180], [-700, -1230], [-200, -1200], [250, -1250], [480, -1230], [570, -1150], [490, -1090], [420, -1150], [540, -1250], [850, -1300], [1300, -1300]],
+];
+
+let seed = 71;
+function random() {
+  seed = (seed * 16807) % 2147483647;
+  return seed / 2147483647;
+}
+
+function draw(parent, tag, attributes) {
+  const element = document.createElementNS(SVG, tag);
+  for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+  parent.append(element);
+  return element;
+}
+
+function drawWarts() {
+  const spots = [
+    [12, -1070, 30, 24], [202, -1050, 26, 21], [-188, -1030, 28, 22], [362, -990, 30, 24], [-348, -960, 24, 19],
+    [92, -990, 34, 27], [-88, -940, 22, 18], [252, -930, 25, 20], [472, -900, 20, 16], [-438, -880, 18, 14],
+    [-248, -890, 26, 21], [132, -880, 20, 16], [372, -875, 17, 14], [-28, -880, 16, 13],
+  ];
+  const group = document.querySelector('.warts');
+  for (const [cx, cy, rx, ry] of spots) draw(group, 'ellipse', { cx, cy, rx, ry, class: 'ink', fill: '#efe7d6', 'stroke-width': 4 });
+}
+
+// A smooth path through points: Catmull-Rom segments written as cubic Béziers.
+function smoothPath(points) {
+  let d = `M${points[0].map(Math.round).join(' ')}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const [p0, p1, p2, p3] = [points[Math.max(i - 1, 0)], points[i], points[i + 1], points[Math.min(i + 2, points.length - 1)]];
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += ` C${[...c1, ...c2, ...p2].map(Math.round).join(' ')}`;
+  }
+  return d;
+}
+
+function measure(points) {
+  return draw(document.querySelector('.measure'), 'path', { d: smoothPath(points) });
+}
+
+// Evenly spaced points along a ribbon, so a spore can join it anywhere downstream.
+function samplesOf(points) {
+  const path = measure(points), length = path.getTotalLength();
+  return Array.from({ length: Math.ceil(length / 50) + 1 }, (_, i) => {
+    const { x, y } = path.getPointAtLength(Math.min(i * 50, length));
+    return [x, y];
+  });
+}
+
+// Drifting down from the gills, pushed slightly downwind, until a ribbon picks it up.
+function ribbonRoute(samples, x, drift) {
+  const join = samples.findIndex(([sx]) => sx >= x + 40);
+  const ride = samples.slice(join).map(([sx, sy]) => [sx, sy + drift]);
+  const fall = [[x, -805], [x + 8, (-805 + ride[0][1]) / 2], ride[0]];
+  return { fall, all: [...fall, ...ride.slice(1)] };
+}
+
+// The chosen spore: a short ride, then a lazy zigzag down to bare ground.
+function landingRoute() {
+  const fall = [[430, -805], [444, -720], [430, -640]];
+  const ride = [[500, -600], [600, -640], [630, -710], [570, -740], [540, -690], [610, -640]];
+  const settle = [[700, -560], [580, -380], [660, -220], [580, -100], LANDING];
+  return { fall, all: [...fall, ...ride, ...settle] };
+}
+
+// Slow drift while falling, then a lift when the wind takes over.
+function flight(route) {
+  const length = measure(route.all).getTotalLength(), fallLength = measure(route.fall).getTotalLength();
+  const fallTime = fallLength / FALL_SPEED;
+  const duration = Math.min(fallTime + (length - fallLength) / WIND_SPEED, 0.95 * LOOP);
+  const keyframes = [
+    { offset: 0, offsetDistance: '0%', easing: 'cubic-bezier(0.3, 0, 0.8, 0.6)' },
+    { offset: fallTime / LOOP, offsetDistance: `${100 * fallLength / length}%`, easing: 'cubic-bezier(0.2, 0.3, 0.6, 1)' },
+    { offset: duration / LOOP, offsetDistance: '100%' },
+    { offset: 1, offsetDistance: '100%' },
+  ];
+  return { duration, keyframes };
+}
+
+function grain(route, launch, size, strength, fadeTime) {
+  const { duration, keyframes } = flight(route);
+  const spore = draw(document.querySelector('.spores'), 'circle', { r: 12 * size, class: 'spore' });
+  spore.style.offsetPath = `path("${smoothPath(route.all)}")`;
+  const timing = { duration: LOOP, delay: launch - LOOP, iterations: Infinity };
+  const ends = duration / LOOP, fade = fadeTime / LOOP;
+  spore.animate(keyframes, timing);
+  spore.animate([
+    { offset: 0, opacity: 0, scale: '0.3' },
+    { offset: 150 / LOOP, opacity: strength, scale: '1' },
+    { offset: ends - fade, opacity: strength, scale: '1' },
+    { offset: ends, opacity: 0, scale: '0.7' },
+    { offset: 1, opacity: 0, scale: '0.3' },
+  ], timing);
+  return launch + duration;
+}
+
+// Each spore is a tiny clump: a few grains side by side on neighbouring tracks, the smaller ones lagging.
+function clump(samples, x, launch) {
+  const drift = 50 * (random() - 0.5);
+  for (const [size, lag, strength, beside] of [[1, 0, 1, 0], [0.65, 180, 0.75, -22], [0.45, 380, 0.55, 20]]) {
+    grain(ribbonRoute(samples, x + beside, drift + 26 * (random() - 0.5)), launch + lag, size, strength, 900);
+  }
+}
+
+// The cap rises a little, then squeezes the spores out and settles.
+function puff() {
+  document.querySelector('.cap-rig').animate([
+    { offset: 0, translate: '0 0', scale: '1 1' },
+    { offset: SQUEEZE - 0.1, translate: '0 -9px', scale: '0.995 1.012', easing: 'cubic-bezier(0.6, 0, 0.9, 0.6)' },
+    { offset: SQUEEZE, translate: '0 6px', scale: '1.012 0.982', easing: 'cubic-bezier(0.2, 0.7, 0.3, 1)' },
+    { offset: SQUEEZE + 0.09, translate: '0 -2px', scale: '0.998 1.004' },
+    { offset: 1, translate: '0 0', scale: '1 1' },
+  ], { duration: PUFF, iterations: Infinity, easing: easeInOut });
+}
+
+// Every ribbon is a pair of brush lines; before each puff a darker stroke runs along one of them.
+function ribbons() {
+  const group = document.querySelector('.gusts');
+  RIBBONS.forEach((points, i) => {
+    for (const [dx, dy] of [[0, 0], [10, 20]]) {
+      const transform = `translate(${dx} ${dy})`;
+      draw(group, 'path', { d: smoothPath(points), class: 'ribbon', transform });
+      if (calm) continue;
+      const gust = draw(group, 'path', { d: smoothPath(points), class: 'gust', transform });
+      const length = gust.getTotalLength(), stroke = 0.4 * length;
+      gust.setAttribute('stroke-dasharray', `${stroke} ${length + stroke}`);
+      gust.animate([
+        { offset: 0, strokeDashoffset: stroke, easing: 'cubic-bezier(0.35, 0, 0.45, 1)' },
+        { offset: 2800 / LOOP, strokeDashoffset: -length },
+        { offset: 1, strokeDashoffset: -length },
+      ], { duration: LOOP, delay: i * PUFF + SQUEEZE * PUFF - 1500 + dy * 4 - LOOP, iterations: Infinity });
+    }
+  });
+}
+
+// The sprout's timeline starts at the landing, so the previous one withers just before the next lands.
+function sprout(landed) {
+  const keyframe = (time, scale, easing = easeInOut) => ({ offset: time / LOOP, scale, easing });
+  document.querySelector('.sprout').animate([
+    keyframe(0, '1 0'),
+    keyframe(250, '1 0', 'cubic-bezier(0.5, 0, 0.8, 0.5)'),
+    keyframe(650, '1.12 0.3', 'cubic-bezier(0.2, 0.6, 0.3, 1)'),
+    keyframe(1300, '0.96 1.06'),
+    keyframe(1700, '1 1'),
+    keyframe(LOOP - 2600, '1 1', 'cubic-bezier(0.5, 0, 0.9, 0.6)'),
+    keyframe(LOOP - 1800, '1.1 0'),
+    keyframe(LOOP, '1 0'),
+  ], { duration: LOOP, delay: landed - LOOP, iterations: Infinity });
+}
+
+function spores() {
+  const [under, low] = RIBBONS.map(samplesOf);
+  const gills = [-470, -380, -290, -200, -110, -20, 70, 160, 250, 340, 430, 520];
+  for (let release = 0; release < 3; release++) {
+    const squeeze = release * PUFF + SQUEEZE * PUFF;
+    for (const x of gills) {
+      if (calm && random() < 0.5) continue;
+      const samples = x < 400 && random() < 0.35 ? low : under;
+      clump(samples, x + 30 * random(), squeeze + 500 * random());
+    }
+  }
+  const landed = grain(landingRoute(), SQUEEZE * PUFF + 120, 1, 1, 500);
+  sprout(landed);
+}
+
+drawWarts();
+ribbons();
+spores();
+if (!calm) puff();
+</script>
+</body>
+</html>

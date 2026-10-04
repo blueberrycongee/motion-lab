@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orbit</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    display: grid; place-items: center;
+    background: radial-gradient(ellipse 80% 70% at 50% 48%, #c8b28a, #b09670 70%, #94795a);
+  }
+  .stage { --w: min(96vw, 128vh); position: relative; width: var(--w); height: calc(var(--w) * 0.75); }
+  .chart { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .orbit { fill: none; stroke: #5e4528; stroke-width: 0.16; opacity: 0.6; }
+  .orbit.moon { stroke-dasharray: 0.4 0.6; opacity: 0.5; }
+  .star { fill: #6b4f2e; opacity: 0.5; }
+
+  /* Every body is a zero-size box at its foot on the orbital plane; one em is its height. */
+  .thing { position: absolute; left: 0; top: 0; }
+  .body {
+    position: absolute; left: -0.5345em; bottom: 0; width: 1.069em; height: 1em;
+    overflow: visible; transform-origin: 50% 100%;
+  }
+  .head { transform-box: fill-box; transform-origin: 50% 100%; }
+  .shadow {
+    position: absolute; left: -0.42em; top: -0.05em; width: 0.84em; height: 0.1em; border-radius: 50%;
+    background: radial-gradient(closest-side, #3f2c1890, #3f2c1800);
+  }
+  .rays {
+    position: absolute; left: -0.62em; top: -1.42em; width: 1.24em; height: 1.24em;
+    animation: turn 140s linear infinite;
+  }
+  @keyframes turn { to { rotate: 1turn; } }
+  @media (prefers-reduced-motion: reduce) { .rays { animation: none; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0">
+  <defs>
+    <radialGradient id="cap-gold" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8c4f12"/><stop offset="1" stop-color="#d99a32"/>
+    </radialGradient>
+    <radialGradient id="cap-red" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6e130b"/><stop offset="1" stop-color="#b8321a"/>
+    </radialGradient>
+    <radialGradient id="cap-sage" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3c4630"/><stop offset="1" stop-color="#7d8a5c"/>
+    </radialGradient>
+    <radialGradient id="cap-brown" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#47291a"/><stop offset="1" stop-color="#8c5a35"/>
+    </radialGradient>
+    <radialGradient id="cap-ochre" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7a4a14"/><stop offset="1" stop-color="#c2843a"/>
+    </radialGradient>
+    <radialGradient id="cap-silver" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5f6563"/><stop offset="1" stop-color="#a9ada4"/>
+    </radialGradient>
+    <g id="stem">
+      <path fill="#e8e2d2" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+      <path fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+    </g>
+    <g id="head">
+      <path fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+      <path style="fill: var(--cap)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+      <g fill="#efe7d6">
+        <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+        <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+        <ellipse cx="-188" cy="-1030" rx="28" ry="22"/>
+        <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+        <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+        <ellipse cx="92" cy="-990" rx="34" ry="27"/>
+        <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+        <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+        <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+        <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+        <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+        <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+        <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+        <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+      </g>
+    </g>
+  </defs>
+</svg>
+<div class="stage">
+  <svg class="chart"></svg>
+</div>
+<template>
+  <div class="thing">
+    <div class="shadow"></div>
+    <svg class="body" viewBox="-620 -1160 1240 1160"><use href="#stem"/><use class="head" href="#head"/></svg>
+  </div>
+</template>
+<script type="module">
+const NS = 'http://www.w3.org/2000/svg';
+const stage = document.querySelector('.stage');
+const chart = document.querySelector('.chart');
+const template = document.querySelector('template');
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Lengths are in percent of the stage width; the sun stands at the origin.
+const ORIGIN_Y = 56;
+chart.setAttribute('viewBox', `-50 ${-ORIGIN_Y * 0.75} 100 75`);
+
+// Inner planets go round faster, as Kepler would have it.
+const PLANETS = [
+  { radius: 17, size: 6.2, cap: 'ochre', phase: 0.4, moons: [] },
+  { radius: 26, size: 7.8, cap: 'red', phase: 2.7, moons: [{ radius: 6.2, size: 2.8, speed: 1.9, phase: 0 }] },
+  { radius: 35.5, size: 6.8, cap: 'sage', phase: 4.6, moons: [{ radius: 5.6, size: 2.4, speed: 2.4, phase: 1 }] },
+  {
+    radius: 45, size: 8.6, cap: 'brown', phase: 1.2,
+    moons: [{ radius: 6.6, size: 2.8, speed: 1.5, phase: 2 }, { radius: 9.6, size: 2.2, speed: -1.1, phase: 5 }],
+  },
+];
+const SUN_SIZE = 19;
+const RATE = calm ? 0.35 : 1;
+
+function add(parent, tag, attributes) {
+  const node = document.createElementNS(NS, tag);
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+  parent.append(node);
+  return node;
+}
+
+// A repeatable scatter of engraved four-point stars.
+let seed = 11;
+function random() {
+  seed = (seed * 16807) % 2147483647;
+  return seed / 2147483647;
+}
+for (let i = 0; i < 34; i++) {
+  const x = -49 + 98 * random(), y = -ORIGIN_Y * 0.75 + 75 * random(), r = 0.25 + 0.45 * random();
+  add(chart, 'path', {
+    class: 'star',
+    d: `M${x} ${y - r * 2} Q${x} ${y} ${x + r} ${y} Q${x} ${y} ${x} ${y + r * 2} Q${x} ${y} ${x - r} ${y} Q${x} ${y} ${x} ${y - r * 2} Z`,
+  });
+}
+
+function makeThing(size, cap) {
+  const el = template.content.firstElementChild.cloneNode(true);
+  el.style.setProperty('--cap', `url(#cap-${cap})`);
+  stage.append(el);
+  return {
+    el, size,
+    body: el.querySelector('.body'), head: el.querySelector('.head'),
+    lean: { x: 0, v: 0 }, capLean: { x: 0, v: 0 }, stride: 0,
+  };
+}
+
+const sun = makeThing(SUN_SIZE, 'gold');
+const rays = add(sun.el, 'svg', { class: 'rays', viewBox: '-100 -100 200 200' });
+for (let i = 0; i < 24; i++) {
+  const a = i * Math.PI / 12, inner = 64, outer = i % 2 ? 80 : 94;
+  add(rays, 'line', {
+    x1: inner * Math.cos(a), y1: inner * Math.sin(a), x2: outer * Math.cos(a), y2: outer * Math.sin(a),
+    stroke: '#6e4f28', 'stroke-width': 1.6, 'stroke-linecap': 'round',
+  });
+}
+sun.el.prepend(rays);
+
+const planets = PLANETS.map((spec) => ({
+  ...spec,
+  thing: makeThing(spec.size, spec.cap),
+  path: add(chart, 'ellipse', { class: 'orbit', cx: 0, cy: 0 }),
+  moons: spec.moons.map((moon) => ({
+    ...moon,
+    thing: makeThing(moon.size, 'silver'),
+    path: add(chart, 'ellipse', { class: 'orbit moon' }),
+  })),
+}));
+
+function spring(s, target, stiffness, damping, dt) {
+  for (let t = 0; t < dt; t += 1 / 240) {
+    const h = Math.min(1 / 240, dt - t);
+    s.v += (stiffness * (target - s.x) - damping * s.v) * h;
+    s.x += s.v * h;
+  }
+}
+
+// Place a body on the plane: nearer things are larger and drawn over farther ones.
+// It walks along its track in little hops, leans into its pace, and its cap trails the lean.
+function pose(thing, x, y, vx, vy, dt, unit) {
+  const speed = Math.hypot(vx, vy);
+  spring(thing.lean, Math.max(-10, Math.min(10, vx * 0.9)), 90, 12, dt);
+  spring(thing.capLean, thing.lean.x, 70, 5, dt);
+  thing.stride += speed * dt / (thing.size * 0.45);
+  const step = calm ? 0 : Math.abs(Math.sin(thing.stride));
+  const contact = calm ? 0 : Math.pow(1 - step, 10);
+  const stretch = 1 + 0.06 * step - 0.12 * contact;
+  const scale = 1 + y * 0.009;
+  const em = thing.size * scale * unit;
+  const px = (50 + x) * unit, py = ORIGIN_Y * 0.75 * unit + y * unit;
+  thing.el.style.translate = `${px}px ${py}px`;
+  thing.el.style.fontSize = `${em}px`;
+  thing.el.style.zIndex = Math.round(1000 + y * 20);
+  thing.body.style.translate = `0 ${-step * 0.12 * em}px`;
+  thing.body.style.rotate = `${thing.lean.x}deg`;
+  thing.body.style.scale = `${2 - stretch} ${stretch}`;
+  thing.head.style.rotate = `${(thing.capLean.x - thing.lean.x) * 1.5}deg`;
+}
+
+let tilt = 0.38;
+let tiltGoal = tilt;
+addEventListener('pointermove', (event) => {
+  tiltGoal = 0.22 + 0.3 * event.clientY / innerHeight;
+});
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 1 / 20);
+  last = now;
+  const t = now / 1000;
+  const unit = stage.clientWidth / 100;
+  tilt += (tiltGoal - tilt) * 0.04;
+
+  // The sun turns slowly in place, breathing.
+  const breath = calm ? 0 : Math.sin(t * 1.1);
+  pose(sun, 0, 0, 0, 0, dt, unit);
+  sun.body.style.scale = `${1 - 0.015 * breath} ${1 + 0.02 * breath}`;
+  sun.body.style.rotate = `${1.5 * Math.sin(t * 0.4)}deg`;
+
+  for (const planet of planets) {
+    const omega = 0.7 * RATE * (17 / planet.radius) ** 1.5;
+    const a = planet.phase + omega * t;
+    const x = planet.radius * Math.cos(a), y = planet.radius * tilt * Math.sin(a);
+    planet.path.setAttribute('rx', planet.radius);
+    planet.path.setAttribute('ry', planet.radius * tilt);
+    pose(planet.thing, x, y, -omega * planet.radius * Math.sin(a), omega * planet.radius * tilt * Math.cos(a), dt, unit);
+    for (const moon of planet.moons) {
+      const m = moon.phase + moon.speed * RATE * t;
+      const mx = x + moon.radius * Math.cos(m), my = y + moon.radius * tilt * Math.sin(m);
+      moon.path.setAttribute('cx', x);
+      moon.path.setAttribute('cy', y);
+      moon.path.setAttribute('rx', moon.radius);
+      moon.path.setAttribute('ry', moon.radius * tilt);
+      const mvx = -omega * planet.radius * Math.sin(a) - moon.speed * RATE * moon.radius * Math.sin(m);
+      pose(moon.thing, mx, my, mvx, 0, dt, unit);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

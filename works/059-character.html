@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Character</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: radial-gradient(ellipse 85% 70% at 50% 40%, #e7c983 0%, #d8b062 55%, #c2954a 100%); }
+  svg { position: fixed; inset: 0; width: 100%; height: 100%; }
+  .breath, .head-breath, .eye { transform-box: view-box; }
+</style>
+</head>
+<body>
+<svg viewBox="-800 -1350 1600 1560" aria-hidden="true">
+  <defs>
+    <linearGradient id="stem-light" gradientUnits="userSpaceOnUse" x1="-180" y1="0" x2="190" y2="0">
+      <stop offset="0" stop-color="#f6f1e5"/>
+      <stop offset="0.5" stop-color="#ebe5d6"/>
+      <stop offset="1" stop-color="#c9bea5"/>
+    </linearGradient>
+    <linearGradient id="under-cap" gradientUnits="userSpaceOnUse" x1="0" y1="-860" x2="0" y2="-770">
+      <stop offset="0" stop-color="#7a5a3a" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#7a5a3a" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="cap-colour" gradientUnits="userSpaceOnUse" x1="0" y1="-1110" x2="0" y2="-820">
+      <stop offset="0" stop-color="#7c180d"/>
+      <stop offset="0.55" stop-color="#a42a15"/>
+      <stop offset="1" stop-color="#bd361c"/>
+    </linearGradient>
+    <linearGradient id="ring-colour" gradientUnits="userSpaceOnUse" x1="-120" y1="0" x2="150" y2="0">
+      <stop offset="0" stop-color="#ebe4d3"/>
+      <stop offset="1" stop-color="#c3b799"/>
+    </linearGradient>
+    <clipPath id="clip-stem"><use href="#stem"/></clipPath>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="16"/></filter>
+    <filter id="blush" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="7"/></filter>
+  </defs>
+
+  <ellipse cx="40" cy="12" rx="330" ry="40" fill="#7d5a2a" opacity="0.4" filter="url(#soft)"/>
+
+  <g class="lean">
+    <g class="breath">
+      <path id="stem" fill="url(#stem-light)" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+      <rect x="-200" y="-870" width="400" height="110" fill="url(#under-cap)" clip-path="url(#clip-stem)"/>
+      <g class="face">
+        <ellipse cx="-22" cy="-693" rx="24" ry="11" fill="#e8907a" opacity="0.5" filter="url(#blush)"/>
+        <ellipse cx="94" cy="-693" rx="24" ry="11" fill="#e8907a" opacity="0.5" filter="url(#blush)"/>
+        <g class="look"><g class="eye" style="transform-origin: -8px -735px">
+          <ellipse cx="-8" cy="-735" rx="15" ry="21" fill="#2a1914"/>
+          <circle cx="-13" cy="-743" r="5" fill="#fff8ec"/>
+        </g></g>
+        <g class="look"><g class="eye" style="transform-origin: 72px -735px">
+          <ellipse cx="72" cy="-735" rx="15" ry="21" fill="#2a1914"/>
+          <circle cx="67" cy="-743" r="5" fill="#fff8ec"/>
+        </g></g>
+      </g>
+      <path fill="url(#ring-colour)" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Q-50 -536 15 -540 Q80 -536 145 -555 Z"/>
+      <path fill="none" stroke="#b7aa8a" stroke-width="4" stroke-linecap="round" opacity="0.6" d="M-60 -560 L-50 -630 M0 -548 L4 -640 M60 -548 L58 -640 M115 -558 L104 -630"/>
+    </g>
+    <g class="head">
+      <g class="head-breath">
+        <path fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+        <path fill="#a8997a" d="M-488 -800 Q32 -830 552 -800 L540 -806 Q32 -836 -476 -806 Z"/>
+        <path fill="url(#cap-colour)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+        <path fill="#fff" opacity="0.13" d="M-430 -900 C-420 -1030 -250 -1090 -60 -1098 C-220 -1060 -360 -1000 -430 -900 Z"/>
+        <g class="warts"></g>
+      </g>
+    </g>
+  </g>
+
+  <g class="moth">
+    <g transform="scale(1.35)">
+      <g class="wing"><path fill="#efe4cc" stroke="#b9a37c" stroke-width="2" d="M0 -6 C18 -34 48 -30 44 -6 C48 10 26 26 0 8 Z"/><circle cx="26" cy="-10" r="4" fill="#b9a37c"/></g>
+      <g class="wing"><path fill="#efe4cc" stroke="#b9a37c" stroke-width="2" d="M0 -6 C18 -34 48 -30 44 -6 C48 10 26 26 0 8 Z"/><circle cx="26" cy="-10" r="4" fill="#b9a37c"/></g>
+      <ellipse rx="6" ry="17" fill="#6b5844"/>
+    </g>
+  </g>
+</svg>
+
+<script type="module">
+const SVG = 'http://www.w3.org/2000/svg';
+const LOOP = 16;                   // seconds of the self-playing story
+const IDLE = 3;                    // seconds after the last pointer move before the story resumes
+const VIEWER = [32, -735];         // looking straight out of the picture
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const easeInOut = 'cubic-bezier(0.45, 0, 0.55, 1)';
+
+const svg = document.querySelector('svg');
+const eyes = [...document.querySelectorAll('.look')];
+const eyeCentres = [[-8, -735], [72, -735]];
+const lean = document.querySelector('.lean');
+const head = document.querySelector('.head');
+const face = document.querySelector('.face');
+const moth = document.querySelector('.moth');
+const wings = [...document.querySelectorAll('.wing')];
+
+function drawWarts() {
+  const spots = [
+    [12, -1070, 30, 24], [202, -1050, 26, 21], [-188, -1030, 28, 22], [362, -990, 30, 24], [-348, -960, 24, 19],
+    [92, -990, 34, 27], [-88, -940, 22, 18], [252, -930, 25, 20], [472, -900, 20, 16], [-438, -880, 18, 14],
+    [-248, -890, 26, 21], [132, -880, 20, 16], [372, -875, 17, 14], [-28, -880, 16, 13],
+  ];
+  const group = document.querySelector('.warts');
+  for (const [cx, cy, rx, ry] of spots) {
+    for (const [dy, fill] of [[5, '#6e150c'], [0, '#efe7d6']]) {
+      const wart = document.createElementNS(SVG, 'ellipse');
+      Object.entries({ cx, cy: cy + dy, rx, ry, fill }).forEach(([name, value]) => wart.setAttribute(name, value));
+      group.append(wart);
+    }
+  }
+}
+
+// The stem swells first and the cap follows a beat later, so a breath travels upward.
+function breathe() {
+  const timing = { duration: calm ? 6000 : 4200, iterations: Infinity, easing: easeInOut, direction: 'alternate' };
+  document.querySelector('.breath').animate([{ scale: '1 1' }, { scale: '1.008 1.014' }], timing);
+  document.querySelector('.head-breath').animate([{ translate: '0 0' }, { translate: '0 -13px' }], { ...timing, delay: 160 });
+}
+
+// Blinks at uneven intervals, one of them a double blink.
+function blink() {
+  const period = 7400;
+  const closedAt = [900, 3900, 4160, 6300];
+  const frames = [{ offset: 0, scale: '1 1' }];
+  for (const at of closedAt) {
+    frames.push({ offset: (at - 70) / period, scale: '1 1', easing: 'ease-in' });
+    frames.push({ offset: at / period, scale: '1.1 0.08', easing: 'ease-out' });
+    frames.push({ offset: (at + 120) / period, scale: '1 1' });
+  }
+  frames.push({ offset: 1, scale: '1 1' });
+  for (const eye of document.querySelectorAll('.eye')) eye.animate(frames, { duration: period, iterations: Infinity });
+}
+
+// The moth's flight through one loop: [second, x, y]. Repeated points are a rest on the cap.
+const flight = [
+  [0, -1100, -560], [1.2, -1000, -600], [2.2, -640, -880], [3.0, -330, -760], [3.7, -130, -1010],
+  [4.3, 170, -1270], [4.9, 60, -1200], [5.4, 40, -1146], [7.0, 40, -1146], [7.6, 250, -1300],
+  [8.3, 560, -1110], [9.0, 830, -1250], [9.8, 1150, -1000], [LOOP, 1150, -1000],
+];
+
+function catmullRom(a, b, c, d, u) {
+  return [0, 1].map((i) => 0.5 * ((2 * b[i]) + (c[i] - a[i]) * u
+    + (2 * a[i] - 5 * b[i] + 4 * c[i] - d[i]) * u * u + (3 * b[i] - a[i] - 3 * c[i] + d[i]) * u * u * u));
+}
+
+function mothAt(t) {
+  const i = flight.findIndex(([time], k) => t >= time && t < flight[k + 1][0]);
+  const [t0, ...b] = flight[i], [t1, ...c] = flight[i + 1];
+  if (b[0] === c[0] && b[1] === c[1]) return { position: b, resting: true };
+  const a = flight[Math.max(i - 1, 0)].slice(1), d = flight[Math.min(i + 2, flight.length - 1)].slice(1);
+  const [x, y] = catmullRom(a, b, c, d, (t - t0) / (t1 - t0));
+  return { position: [x, y + 9 * Math.sin(t * 11)], resting: false };
+}
+
+// Where the mushroom looks when nobody is moving the pointer.
+function storyGaze(t, mothPosition) {
+  if (t > 1.4 && t < 9.2) return mothPosition;
+  if (t > 10.2 && t < 11.6) return [-760, -560];
+  if (t > 12.6 && t < 14) return [520, -60];
+  return VIEWER;
+}
+
+// A critically damped spring: quick for the eyes, slower for the head, so the head follows the look.
+function spring(stiffness) {
+  return { position: [...VIEWER], velocity: [0, 0], stiffness };
+}
+
+function follow(state, target, dt) {
+  const damping = 2 * Math.sqrt(state.stiffness);
+  for (const axis of [0, 1]) {
+    const force = state.stiffness * (target[axis] - state.position[axis]) - damping * state.velocity[axis];
+    state.velocity[axis] += force * dt;
+    state.position[axis] += state.velocity[axis] * dt;
+  }
+}
+
+const clamp = (value) => Math.max(-1, Math.min(1, value));
+
+function pose(eyeGaze, headGaze) {
+  eyes.forEach((eye, i) => {
+    const [dx, dy] = [eyeGaze[0] - eyeCentres[i][0], eyeGaze[1] - eyeCentres[i][1]];
+    const reach = Math.hypot(dx, dy) + 260;
+    eye.setAttribute('transform', `translate(${(15 * dx / reach).toFixed(2)} ${(11 * dy / reach).toFixed(2)})`);
+  });
+  const turn = clamp((headGaze[0] - VIEWER[0]) / 650), lift = clamp((headGaze[1] - VIEWER[1]) / 650);
+  face.setAttribute('transform', `translate(${(turn * 18).toFixed(2)} ${(lift * 8).toFixed(2)})`);
+  head.setAttribute('transform', `translate(${(turn * 26).toFixed(2)} ${(lift * 9).toFixed(2)}) rotate(${(turn * 4).toFixed(2)} 32 -820)`);
+  lean.setAttribute('transform', `skewX(${(-turn * 2.5).toFixed(2)})`);
+}
+
+function placeMoth(t, { position, resting }, heading) {
+  const flap = resting ? 0.75 + 0.15 * Math.sin(t * 2.4) : 0.2 + 0.8 * Math.abs(Math.cos(t * 26));
+  wings[0].setAttribute('transform', `scale(${flap.toFixed(2)} 1)`);
+  wings[1].setAttribute('transform', `scale(${(-flap).toFixed(2)} 1)`);
+  moth.setAttribute('transform', `translate(${position[0].toFixed(1)} ${position[1].toFixed(1)}) rotate(${heading.toFixed(1)})`);
+}
+
+let pointer = null, lastInput = -Infinity;
+window.addEventListener('pointermove', (event) => {
+  pointer = new DOMPoint(event.clientX, event.clientY).matrixTransform(svg.getScreenCTM().inverse());
+  lastInput = performance.now() / 1000;
+});
+
+function run() {
+  const eyesState = spring(calm ? 60 : 260), headState = spring(calm ? 8 : 22);
+  let previous = performance.now() / 1000, heading = 0;
+  requestAnimationFrame(function frame(now) {
+    const seconds = now / 1000, dt = Math.min(seconds - previous, 0.05);
+    previous = seconds;
+    const t = seconds % LOOP;
+    const flying = calm ? null : mothAt(t);
+    if (flying) {
+      const ahead = mothAt((t + 0.08) % LOOP).position;
+      const angle = (Math.atan2(ahead[1] - flying.position[1], ahead[0] - flying.position[0]) * 180) / Math.PI + 90;
+      heading = flying.resting ? heading * 0.95 : angle;
+      placeMoth(seconds, flying, heading);
+    }
+    const target = seconds - lastInput < IDLE ? [pointer.x, pointer.y] : calm ? VIEWER : storyGaze(t, flying.position);
+    follow(eyesState, target, dt);
+    follow(headState, target, dt);
+    pose(eyesState.position, headState.position);
+    requestAnimationFrame(frame);
+  });
+}
+
+drawWarts();
+breathe();
+blink();
+if (calm) moth.remove();
+run();
+</script>
+</body>
+</html>

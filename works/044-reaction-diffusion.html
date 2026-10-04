@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reaction Diffusion</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1e2526; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('Float render targets are not supported');
+
+// The simulation grid covers a fixed square of mushroom units, so the pattern
+// scales with the mushroom and the thumbnail is the full view in miniature.
+const GRID = 512;
+const ORIGIN = [-0.62, -0.1];
+const SPAN = 1.3;
+
+const vertex = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const shape = `
+float sdEllipse(vec2 p, vec2 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom in profile: y up, ground at 0, cap about 1.12 wide, top near 1.11.
+// Returns signed distance (negative inside) and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom2D(vec2 p) {
+  p.x -= 0.05 * p.y * p.y;
+  float r = abs(p.x);
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43);
+  float ring = max(r - 0.096 - (0.66 - p.y) * 0.32, abs(p.y - 0.605) - 0.05);
+  float under = 0.82 + 0.02 * (1.0 - min(r * r / 0.3125, 1.0));
+  float cap = max(sdEllipse(p - vec2(0.0, 0.8), vec2(0.56, 0.31)), under - p.y);
+  float gills = max(r - 0.55, max(p.y - under, 0.8 + 0.015 * (1.0 - min(r * r / 0.27, 1.0)) - p.y));
+  stem = max(stem, -min(cap, gills));
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  if (stem < res.x) res = vec2(stem, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+
+// Warts on the visible face of the cap, as in the canonical profile paths.
+const vec3 WARTS[14] = vec3[](
+  vec3(-0.02, 1.07, 0.03), vec3(0.17, 1.05, 0.026), vec3(-0.22, 1.03, 0.028), vec3(0.33, 0.99, 0.03),
+  vec3(-0.38, 0.96, 0.024), vec3(0.06, 0.99, 0.034), vec3(-0.12, 0.94, 0.022), vec3(0.22, 0.93, 0.025),
+  vec3(0.44, 0.9, 0.02), vec3(-0.47, 0.88, 0.018), vec3(-0.28, 0.89, 0.026), vec3(0.1, 0.88, 0.02),
+  vec3(0.34, 0.875, 0.017), vec3(-0.06, 0.88, 0.016));
+
+float wart(vec2 p) {
+  float d = 1e3;
+  for (int i = 0; i < 14; i++) {
+    vec2 q = p - WARTS[i].xy - vec2(0.032, 0.0);
+    d = min(d, length(q * vec2(1.0, 1.25)) - WARTS[i].z);
+  }
+  return d;
+}
+
+const vec2 ORIGIN = vec2(${ORIGIN.join(', ')});
+const float SPAN = ${SPAN.toFixed(2)};
+const float GRID = ${GRID.toFixed(1)};
+`;
+
+// Each cell stores the two chemicals of the Gray-Scott model, u (substrate)
+// and v (catalyst), plus a slowly spreading stain that records where v has been.
+const step = `#version 300 es
+precision highp float;
+uniform sampler2D uState;
+uniform float uDecay;
+out vec4 outState;
+${shape}
+
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy);
+  vec2 p = ORIGIN + gl_FragCoord.xy / GRID * SPAN;
+  vec2 m = mushroom2D(p);
+  // Outside the silhouette the medium stays fresh: u = 1, v = 0.
+  if (m.x > 0.0) { outState = vec4(1.0, 0.0, 0.0, 0.0); return; }
+
+  vec4 s = texelFetch(uState, c, 0);
+  vec4 lapX = texelFetch(uState, c + ivec2(1, 0), 0) + texelFetch(uState, c - ivec2(1, 0), 0) - 2.0 * s;
+  vec4 lapY = texelFetch(uState, c + ivec2(0, 1), 0) + texelFetch(uState, c - ivec2(0, 1), 0) - 2.0 * s;
+
+  // The cap grows dividing spots; the stem, ring and gills grow a maze whose
+  // faster vertical diffusion stretches it into fibres along their length.
+  bool cap = m.y == 0.0;
+  vec2 fk = cap ? vec2(0.025, 0.06) : vec2(0.029, 0.057);
+  vec2 aniso = cap ? vec2(1.0) : vec2(0.45, 1.55);
+  vec4 lap = 0.2 * (aniso.x * lapX + aniso.y * lapY);
+
+  float u = s.x, v = s.y;
+  float uvv = u * v * v;
+  u += lap.x - uvv + fk.x * (1.0 - u);
+  v += 0.5 * lap.y + uvv - (fk.x + fk.y + uDecay) * v;
+  // The stain saturates near v and fades a few cells away from it.
+  float stain = s.z + 0.08 * (lapX.z + lapY.z) + 0.04 * v - 0.003 * s.z;
+  outState = vec4(clamp(u, 0.0, 1.0), clamp(v, 0.0, 1.0), clamp(stain, 0.0, 1.0), 0.0);
+}`;
+
+const seed = `#version 300 es
+precision highp float;
+uniform vec3 uSeeds[2];
+uniform float uNoise;
+out vec4 outState;
+${shape}
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7)) + uNoise) * 43758.5453); }
+
+void main() {
+  vec2 p = ORIGIN + gl_FragCoord.xy / GRID * SPAN;
+  float v = 0.0;
+  for (int i = 0; i < 2; i++) {
+    if (length(p - uSeeds[i].xy) < uSeeds[i].z) v = 0.25 + 0.5 * hash(gl_FragCoord.xy);
+  }
+  outState = vec4(1.0 - v, v, 0.0, 0.0);
+}`;
+
+const display = `#version 300 es
+precision highp float;
+uniform sampler2D uState;
+uniform vec2 uResolution;
+uniform vec3 uView;
+out vec4 outColor;
+${shape}
+
+// Float textures are not filterable everywhere, so interpolate by hand.
+vec4 state(vec2 p) {
+  vec2 g = (p - ORIGIN) / SPAN * GRID - 0.5;
+  ivec2 i = clamp(ivec2(floor(g)), ivec2(0), ivec2(GRID) - 2);
+  vec2 f = clamp(g - vec2(i), 0.0, 1.0);
+  vec4 a = mix(texelFetch(uState, i, 0), texelFetch(uState, i + ivec2(1, 0), 0), f.x);
+  vec4 b = mix(texelFetch(uState, i + ivec2(0, 1), 0), texelFetch(uState, i + ivec2(1, 1), 0), f.x);
+  return mix(a, b, f.y);
+}
+
+vec3 tissue(vec2 p, float part) {
+  if (part == 1.0) return vec3(0.82, 0.78, 0.68);
+  if (part != 0.0) return vec3(0.91, 0.89, 0.82);
+  if (wart(p) < 0.0) return vec3(0.94, 0.91, 0.84);
+  float rim = length((p - vec2(0.032, 0.8)) / vec2(0.56, 0.31));
+  return mix(vec3(0.43, 0.07, 0.04), vec3(0.72, 0.2, 0.1), smoothstep(0.2, 1.0, rim));
+}
+
+void main() {
+  vec2 frag = gl_FragCoord.xy;
+  vec2 p = (frag - uView.xy) / uView.z;
+
+  // A dark slate bench, lit a little from above.
+  vec2 q = frag / uResolution - vec2(0.5, 0.62);
+  vec3 col = mix(vec3(0.17, 0.21, 0.215), vec3(0.09, 0.11, 0.115), smoothstep(0.1, 0.8, length(q)));
+
+  vec2 m = mushroom2D(p);
+  float px = 1.5 / uView.z;
+  float inside = smoothstep(px, -px, m.x);
+  if (inside > 0.0) {
+    float cell = SPAN / GRID;
+    vec4 s = state(p);
+    float dx = state(p + vec2(cell, 0.0)).y - state(p - vec2(cell, 0.0)).y;
+    float dy = state(p + vec2(0.0, cell)).y - state(p - vec2(0.0, cell)).y;
+    // The catalyst reads as a raised, slightly glossy gel lit from the upper left.
+    vec3 n = normalize(vec3(-dx, -dy, 0.35));
+    float light = 0.75 + 0.35 * dot(n, normalize(vec3(-0.5, 0.6, 0.6)));
+    float gloss = pow(max(dot(n, normalize(vec3(-0.3, 0.4, 1.0))), 0.0), 24.0);
+
+    vec3 base = tissue(p, m.y);
+    float v = smoothstep(0.12, 0.38, s.y);
+    vec3 gel = mix(base * 0.42, base, v) * light + gloss * 0.12 * v;
+    // An unstained ghost of the silhouette, where the reaction has not reached yet.
+    vec3 ghost = mix(col, base * 0.32, 0.5);
+    col = mix(col, mix(ghost, gel, smoothstep(0.0, 0.6, s.z)), inside);
+  }
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+function link(fragment) {
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+  gl.bindAttribLocation(program, 0, 'position');
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+  const uniforms = {};
+  for (let i = 0; i < gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS); i++) {
+    const name = gl.getActiveUniform(program, i).name.replace('[0]', '');
+    uniforms[name] = gl.getUniformLocation(program, name);
+  }
+  return { program, uniforms };
+}
+
+const stepProgram = link(step);
+const seedProgram = link(seed);
+const displayProgram = link(display);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+// Two state textures, read from one while writing the other.
+function target() {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, GRID, GRID);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  const framebuffer = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+  return { texture, framebuffer };
+}
+let read = target(), write = target();
+
+// Inoculate at the foot of the stem; the reaction climbs it and spreads
+// through the gills into the cap.
+function inoculate() {
+  const seeds = [[0.02 * (Math.random() - 0.5), 0.04, 0.04], [0.03 * (Math.random() - 0.5), 0.12, 0.025]];
+  gl.useProgram(seedProgram.program);
+  gl.uniform3fv(seedProgram.uniforms.uSeeds, seeds.flat());
+  gl.uniform1f(seedProgram.uniforms.uNoise, Math.random() * 100);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, read.framebuffer);
+  gl.viewport(0, 0, GRID, GRID);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+function simulate(iterations, decay) {
+  gl.useProgram(stepProgram.program);
+  gl.uniform1f(stepProgram.uniforms.uDecay, decay);
+  gl.viewport(0, 0, GRID, GRID);
+  for (let i = 0; i < iterations; i++) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, write.framebuffer);
+    gl.bindTexture(gl.TEXTURE_2D, read.texture);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    [read, write] = [write, read];
+  }
+}
+
+// One cycle, in simulation iterations: the stain spreads and fills the
+// silhouette, rests, then a rising decay dissolves it before the next seeding.
+const CYCLE = 25000, DISSOLVE = 19000, DISSOLVED = 23000;
+const ITERATIONS_PER_SECOND = 1000;
+// A slow GPU falls behind rather than skipping, so every phase is still seen.
+const MAX_PER_FRAME = 40;
+
+function decayAt(phase) {
+  const t = Math.min(Math.max((phase - DISSOLVE) / (DISSOLVED - DISSOLVE), 0), 1);
+  return 0.03 * t * t;
+}
+
+let iteration = 0, pending = 0;
+inoculate();
+// Start a little into the growth so the first frame already shows the pattern.
+for (; iteration < 3000; iteration += 40) simulate(40, 0);
+
+let last = performance.now();
+function frame(ms) {
+  const dt = Math.min((ms - last) / 1000, 0.1);
+  last = ms;
+  pending = Math.min(pending + dt * ITERATIONS_PER_SECOND, MAX_PER_FRAME);
+  while (pending >= 1) {
+    const phase = iteration % CYCLE;
+    const count = Math.min(Math.floor(pending), CYCLE - phase);
+    simulate(count, decayAt(phase));
+    iteration += count;
+    pending -= count;
+    if (iteration % CYCLE === 0) inoculate();
+  }
+
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  // Portrait screens are limited by the cap's width rather than the height.
+  const s = Math.min(w * 0.8, h * 0.6);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, w, h);
+  gl.useProgram(displayProgram.program);
+  gl.bindTexture(gl.TEXTURE_2D, read.texture);
+  gl.uniform2f(displayProgram.uniforms.uResolution, w, h);
+  gl.uniform3f(displayProgram.uniforms.uView, w / 2, h / 2 - 0.52 * s, s);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

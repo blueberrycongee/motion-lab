@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Physarum</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #26241c; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('Float render targets are not supported');
+
+// The trail grid covers a fixed square of mushroom units, so the network
+// scales with the mushroom and the thumbnail is the full view in miniature.
+const GRID = 1024;
+const ORIGIN = [-0.62, -0.1];
+const SPAN = 1.3;
+const AGENTS = 512;
+
+const quad = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const shape = `
+float sdEllipse(vec2 p, vec2 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom in profile: y up, ground at 0, cap about 1.12 wide, top near 1.11.
+// Returns signed distance (negative inside) and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom2D(vec2 p) {
+  p.x -= 0.05 * p.y * p.y;
+  float r = abs(p.x);
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43);
+  float ring = max(r - 0.096 - (0.66 - p.y) * 0.32, abs(p.y - 0.605) - 0.05);
+  float under = 0.82 + 0.02 * (1.0 - min(r * r / 0.3125, 1.0));
+  float cap = max(sdEllipse(p - vec2(0.0, 0.8), vec2(0.56, 0.31)), under - p.y);
+  float gills = max(r - 0.55, max(p.y - under, 0.8 + 0.015 * (1.0 - min(r * r / 0.27, 1.0)) - p.y));
+  stem = max(stem, -min(cap, gills));
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  if (stem < res.x) res = vec2(stem, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+
+// Warts on the visible face of the cap, as in the canonical profile paths.
+const vec3 WARTS[14] = vec3[](
+  vec3(-0.02, 1.07, 0.03), vec3(0.17, 1.05, 0.026), vec3(-0.22, 1.03, 0.028), vec3(0.33, 0.99, 0.03),
+  vec3(-0.38, 0.96, 0.024), vec3(0.06, 0.99, 0.034), vec3(-0.12, 0.94, 0.022), vec3(0.22, 0.93, 0.025),
+  vec3(0.44, 0.9, 0.02), vec3(-0.47, 0.88, 0.018), vec3(-0.28, 0.89, 0.026), vec3(0.1, 0.88, 0.02),
+  vec3(0.34, 0.875, 0.017), vec3(-0.06, 0.88, 0.016));
+
+float wart(vec2 p) {
+  float d = 1e3;
+  for (int i = 0; i < 14; i++) {
+    vec2 q = p - WARTS[i].xy - vec2(0.032, 0.0);
+    d = min(d, length(q * vec2(1.0, 1.25)) - WARTS[i].z);
+  }
+  return d;
+}
+
+const vec2 ORIGIN = vec2(${ORIGIN.join(', ')});
+const float SPAN = ${SPAN.toFixed(2)};
+const float GRID = ${GRID.toFixed(1)};
+vec2 toUnits(vec2 cell) { return ORIGIN + cell / GRID * SPAN; }
+`;
+
+// Each agent is a texel: position in grid cells, heading, and whether it has
+// been released yet. Agents follow the trail they and others leave (Jones 2010).
+const move = `#version 300 es
+precision highp float;
+uniform sampler2D uAgents;
+uniform sampler2D uTrail;
+uniform sampler2D uMask;
+uniform float uPhase;
+uniform float uRelease;
+uniform uint uSeed;
+out vec4 outAgent;
+${shape}
+
+// PCG hash; agents in neighbouring texels must not share their randomness,
+// or their headings line up along the grid axes.
+uint pcg(uint v) {
+  uint state = v * 747796405u + 2891336453u;
+  uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+  return (word >> 22u) ^ word;
+}
+
+float random(uint id, uint salt) { return float(pcg(id ^ pcg(salt))) / 4294967295.0; }
+
+const float SENSE_DISTANCE = 6.0;
+const float SENSE_ANGLE = 0.6;
+const float TURN = 0.45;
+// A little wander keeps the veins from collapsing into a few thick cords.
+const float WANDER = 0.4;
+// Agents stop telling strong veins from moderate ones above this level, so
+// thick cords cannot keep drawing in their neighbours and the mesh stays fine.
+const float SATURATION = 6.0;
+
+float sense(vec2 pos, float heading) {
+  return min(texture(uTrail, (pos + SENSE_DISTANCE * vec2(cos(heading), sin(heading))) / GRID).x, SATURATION);
+}
+
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy);
+  vec4 agent = texelFetch(uAgents, c, 0);
+  uint id = uint(c.y * ${AGENTS} + c.x);
+  float noise = random(id, floatBitsToUint(uPhase));
+
+  // Agents settle on the mushroom from the ground up, each at its own spot.
+  if (agent.w == 0.0) {
+    for (int i = 0; i < 4; i++) {
+      vec2 cell = vec2(random(id, uSeed + uint(2 * i)), random(id, uSeed + uint(2 * i + 1))) * GRID;
+      if (texelFetch(uMask, ivec2(cell), 0).r > 0.0) {
+        float arrival = (toUnits(cell).y / 1.1 + 0.15 * random(id, uSeed + 9u)) / 1.15 * uRelease;
+        outAgent = uPhase < arrival ? agent : vec4(cell, noise * 6.2832, 1.0);
+        return;
+      }
+    }
+    outAgent = agent;
+    return;
+  }
+
+  vec2 pos = agent.xy;
+  float heading = agent.z;
+  float forward = sense(pos, heading);
+  float left = sense(pos, heading + SENSE_ANGLE);
+  float right = sense(pos, heading - SENSE_ANGLE);
+  if (forward < left && forward < right) heading += (noise - 0.5) * 4.0 * TURN;
+  else if (left > forward) heading += TURN;
+  else if (right > forward) heading -= TURN;
+
+  heading += (random(id, floatBitsToUint(uPhase) + 7u) - 0.5) * WANDER;
+  vec2 next = pos + vec2(cos(heading), sin(heading));
+  // The plasmodium cannot leave the mushroom; at the edge it turns somewhere new.
+  if (texelFetch(uMask, ivec2(next), 0).r == 0.0) {
+    outAgent = vec4(pos, noise * 6.2832, 1.0);
+    return;
+  }
+  outAgent = vec4(next, heading, 1.0);
+}`;
+
+const depositVertex = `#version 300 es
+uniform sampler2D uAgents;
+void main() {
+  ivec2 c = ivec2(gl_VertexID % ${AGENTS}, gl_VertexID / ${AGENTS});
+  vec4 agent = texelFetch(uAgents, c, 0);
+  // Unreleased agents are parked outside the clip volume.
+  gl_Position = agent.w == 0.0 ? vec4(2.0) : vec4(agent.xy / ${GRID}.0 * 2.0 - 1.0, 0.0, 1.0);
+  gl_PointSize = 1.0;
+}`;
+
+const depositFragment = `#version 300 es
+precision highp float;
+uniform float uDeposit;
+out vec4 outTrail;
+void main() { outTrail = vec4(uDeposit, 0.0, 0.0, 0.0); }`;
+
+// Which cells lie inside the mushroom, and which carry an oat flake on a wart.
+const mask = `#version 300 es
+precision highp float;
+out vec4 outMask;
+${shape}
+
+void main() {
+  vec2 p = toUnits(gl_FragCoord.xy);
+  outMask = vec4(step(mushroom2D(p).x, 0.0), step(wart(p), 0.0), 0.0, 1.0);
+}`;
+
+// The trail (red) spreads and evaporates. Oat flakes on the warts keep feeding
+// it, so the network settles into veins that join them, as in Tero et al. 2010.
+// Where the plasmodium has been it leaves a film of slime (green) that dries
+// only once it starves.
+const diffuse = `#version 300 es
+precision highp float;
+uniform sampler2D uTrail;
+uniform sampler2D uMask;
+uniform float uFood;
+uniform float uDry;
+out vec4 outTrail;
+
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy);
+  vec4 cell = texelFetch(uMask, c, 0);
+  if (cell.r == 0.0) { outTrail = vec4(0.0); return; }
+  vec2 sum = vec2(0.0);
+  for (int y = -1; y <= 1; y++)
+    for (int x = -1; x <= 1; x++) sum += texelFetch(uTrail, c + ivec2(x, y), 0).xy;
+  float trail = sum.x / 9.0 * 0.9 + cell.g * uFood;
+  float slime = clamp(sum.y / 9.0 + 0.004 * min(trail, 1.0) - uDry, 0.0, 1.0);
+  outTrail = vec4(trail, slime, 0.0, 0.0);
+}`;
+
+const display = `#version 300 es
+precision highp float;
+uniform sampler2D uTrail;
+uniform vec2 uResolution;
+uniform vec3 uView;
+out vec4 outColor;
+${shape}
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+vec3 tint(vec2 p, float part) {
+  if (part == 1.0) return vec3(0.82, 0.78, 0.68);
+  if (part != 0.0) return vec3(0.91, 0.89, 0.82);
+  if (wart(p) < 0.0) return vec3(0.94, 0.91, 0.84);
+  float rim = length((p - vec2(0.032, 0.8)) / vec2(0.56, 0.31));
+  return mix(vec3(0.6, 0.12, 0.06), vec3(0.8, 0.24, 0.12), smoothstep(0.2, 1.0, rim));
+}
+
+void main() {
+  vec2 frag = gl_FragCoord.xy;
+  vec2 p = (frag - uView.xy) / uView.z;
+
+  // Damp agar in a dim room, faintly mottled.
+  vec2 q = frag / uResolution - vec2(0.5, 0.55);
+  vec3 col = mix(vec3(0.17, 0.16, 0.12), vec3(0.09, 0.085, 0.065), smoothstep(0.1, 0.85, length(q)));
+  col *= 0.97 + 0.06 * hash(floor(frag / 3.0));
+
+  vec2 uv = (p - ORIGIN) / SPAN;
+  if (all(greaterThan(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)))) {
+    vec2 trail = texture(uTrail, uv).xy;
+    float vein = 1.0 - exp(-trail.x * 0.08);
+    vec3 strand = tint(p, mushroom2D(p).y);
+    col = mix(col, strand * 0.45, 0.4 * trail.y);
+    col = mix(col, strand * (0.55 + 0.5 * vein), smoothstep(0.02, 0.6, vein));
+  }
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+function link(vertex, fragment) {
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+  gl.bindAttribLocation(program, 0, 'position');
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+  const uniforms = {};
+  for (let i = 0; i < gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS); i++) {
+    const name = gl.getActiveUniform(program, i).name;
+    uniforms[name] = gl.getUniformLocation(program, name);
+  }
+  return { program, uniforms };
+}
+
+const moveProgram = link(quad, move);
+const depositProgram = link(depositVertex, depositFragment);
+const diffuseProgram = link(quad, diffuse);
+const maskProgram = link(quad, mask);
+const displayProgram = link(quad, display);
+
+const quadVertices = gl.createVertexArray();
+// The deposit pass reads agents by gl_VertexID and needs no attributes.
+const agentPoints = gl.createVertexArray();
+gl.bindVertexArray(quadVertices);
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+function target(size, format, filter) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, format, size, size);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const framebuffer = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+  return { texture, framebuffer };
+}
+
+// Agents need full float positions; the trail is half float so it can be
+// blended additively and filtered without extra extensions.
+let agents = [target(AGENTS, gl.RGBA32F, gl.NEAREST), target(AGENTS, gl.RGBA32F, gl.NEAREST)];
+let trails = [target(GRID, gl.RGBA16F, gl.LINEAR), target(GRID, gl.RGBA16F, gl.LINEAR)];
+const cells = target(GRID, gl.RGBA8, gl.NEAREST);
+pass(maskProgram, cells, GRID, []);
+gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+function pass(program, output, size, inputs) {
+  gl.useProgram(program.program);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, output.framebuffer);
+  gl.viewport(0, 0, size, size);
+  inputs.forEach(([name, texture], unit) => {
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.uniform1i(program.uniforms[name], unit);
+  });
+}
+
+// One cycle in seconds: the plasmodium is released and explores, settles into
+// veins between the flakes, then stops feeding and fades before the next one.
+const CYCLE = 18, RELEASE = 4, STARVE = 12, STARVED = 16;
+const STEPS_PER_SECOND = 60;
+const MAX_STEPS_PER_FRAME = 3;
+
+let seed = 0;
+function inoculate() {
+  seed = Math.floor(Math.random() * 1e9);
+  for (const t of [...agents, ...trails]) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.framebuffer);
+    gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
+  }
+}
+
+function step(phase) {
+  const feeding = 1 - Math.min(Math.max((phase - STARVE) / (STARVED - STARVE), 0), 1);
+
+  pass(moveProgram, agents[1], AGENTS, [
+    ['uAgents', agents[0].texture], ['uTrail', trails[0].texture], ['uMask', cells.texture],
+  ]);
+  gl.uniform1f(moveProgram.uniforms.uPhase, phase);
+  gl.uniform1f(moveProgram.uniforms.uRelease, RELEASE);
+  gl.uniform1ui(moveProgram.uniforms.uSeed, seed);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  agents.reverse();
+
+  pass(depositProgram, trails[0], GRID, [['uAgents', agents[0].texture]]);
+  gl.uniform1f(depositProgram.uniforms.uDeposit, feeding);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE);
+  gl.bindVertexArray(agentPoints);
+  gl.drawArrays(gl.POINTS, 0, AGENTS * AGENTS);
+  gl.bindVertexArray(quadVertices);
+  gl.disable(gl.BLEND);
+
+  pass(diffuseProgram, trails[1], GRID, [['uTrail', trails[0].texture], ['uMask', cells.texture]]);
+  gl.uniform1f(diffuseProgram.uniforms.uFood, 0.6 * feeding);
+  gl.uniform1f(diffuseProgram.uniforms.uDry, 0.004 * (1 - feeding));
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  trails.reverse();
+}
+
+// The first cycle starts with every agent released at once, so the network
+// condenses over the whole mushroom straight away.
+let simTime = RELEASE, pending = 0;
+inoculate();
+
+let last = performance.now();
+function frame(ms) {
+  const dt = Math.min((ms - last) / 1000, 0.1);
+  last = ms;
+  pending = Math.min(pending + dt * STEPS_PER_SECOND, MAX_STEPS_PER_FRAME);
+  for (; pending >= 1; pending--) {
+    const before = simTime;
+    simTime += 1 / STEPS_PER_SECOND;
+    if (Math.floor(simTime / CYCLE) !== Math.floor(before / CYCLE)) inoculate();
+    step(simTime % CYCLE);
+  }
+
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  // Portrait screens are limited by the cap's width rather than the height.
+  const s = Math.min(w * 0.8, h * 0.6);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, w, h);
+  gl.useProgram(displayProgram.program);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, trails[0].texture);
+  gl.uniform1i(displayProgram.uniforms.uTrail, 0);
+  gl.uniform2f(displayProgram.uniforms.uResolution, w, h);
+  gl.uniform3f(displayProgram.uniforms.uView, w / 2, h / 2 - 0.52 * s, s);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

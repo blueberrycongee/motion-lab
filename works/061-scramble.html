@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scramble</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: radial-gradient(100% 90% at 50% 45%, #2e2d2a, #1f1e1c 75%); }
+  .row, .probe {
+    position: absolute; left: 0; top: 0; white-space: pre; line-height: 1;
+    font-family: ui-monospace, Menlo, Consolas, 'Liberation Mono', 'DejaVu Sans Mono', monospace;
+  }
+  .row { font-size: var(--size); }
+  .probe { font-size: 100px; visibility: hidden; }
+</style>
+</head>
+<body>
+<span class="probe">MMMMMMMMMM</span>
+<script type="module">
+const ROWS = 46;
+const POOL = '!#$%*+-/:;=?@[]^_{|}~0123456789abcdefghkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ';
+const RAMP = '.:-=+*#%@';
+const NOISE = '#625e54';
+const CYCLE = 14.5;
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const TICK = calm ? 1 / 6 : 1 / 24;
+
+// The canonical profile, sampled in mushroom units: y up, ground at 0, cap about 1.12 wide.
+const SPOTS = [
+  [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+  [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+  [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+  [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+];
+
+function ellipse(px, py, rx, ry) {
+  const k0 = Math.hypot(px / rx, py / ry);
+  const k1 = Math.hypot(px / (rx * rx), py / (ry * ry));
+  return k0 * (k0 - 1) / k1;
+}
+
+function mix(a, b, t) {
+  const ca = a.match(/\w\w/g).map((h) => parseInt(h, 16));
+  const cb = b.match(/\w\w/g).map((h) => parseInt(h, 16));
+  t = Math.min(1, Math.max(0, t));
+  return `rgb(${ca.map((c, i) => Math.round(c + (cb[i] - c) * t)).join()})`;
+}
+
+const shade = (lit) => RAMP[Math.round(Math.min(1, Math.max(0, lit)) * (RAMP.length - 1))];
+
+// Light comes from the upper left and a little in front.
+function lambert(nx, ny) {
+  const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+  return -0.45 * nx + 0.55 * ny + 0.7 * nz;
+}
+
+// The character and colour of the finished picture at (x0, y), or null for empty paper.
+function artAt(x0, y, cellH) {
+  const x = x0 - 0.05 * y * y;
+  const r = Math.abs(x);
+  const under = 0.82 + 0.02 * (1 - Math.min(r * r / 0.3125, 1));
+  if (Math.max(ellipse(x, y - 0.8, 0.56, 0.31), under - y) < 0) {
+    for (const [sx, sy, sr] of SPOTS) {
+      const d = ((x0 - 0.032 - sx) / sr) ** 2 + ((y - sy) / (sr * 0.8)) ** 2;
+      if (d < 1.5) return [d < 0.6 && sr > 0.025 ? 'O' : 'o', '#efe7d6'];
+    }
+    const lit = lambert(x / 0.56, (y - 0.8) / 0.31);
+    return [shade(0.4 + lit * 0.6), mix('701409', 'e2522c', lit * 1.1)];
+  }
+  // The gill band is thinner than a row, so it claims the whole row beneath the cap.
+  const gillTop = 0.8 + 0.015 * (1 - Math.min(r * r / 0.27, 1)) - cellH * 0.5;
+  if (Math.max(r - 0.55, y - under, gillTop - y) < 0) return ['|', '#b3a78c'];
+  const ringR = 0.096 + (0.66 - y) * 0.32;
+  if (Math.max(r - ringR, Math.abs(y - 0.605) - 0.05) < 0) {
+    return ['=', mix('8f8574', 'e8e2d2', lambert(x / ringR, 0.2))];
+  }
+  const stemR = 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  if (Math.max(r - stemR, Math.abs(y - 0.43) - 0.43) < 0) {
+    const lit = lambert(x / stemR, 0);
+    return [shade(0.25 + lit * 0.75), mix('857c6a', 'f0eadc', lit)];
+  }
+  // Leaf litter along the ground and a few tufts of grass beside the stem.
+  if (Math.abs(y + cellH * 0.25) < cellH * 0.5 && Math.abs(x0) < 0.95 && Math.random() < 0.85 - Math.abs(x0) * 0.6) {
+    return ['_.,-~'[Math.floor(Math.random() * 5)], '#6c684b'];
+  }
+  if (Math.abs(y - cellH * 0.75) < cellH * 0.5 && r > 0.15 && r < 0.55 && Math.random() < 0.3) {
+    return ['"\',`;'[Math.floor(Math.random() * 5)], '#807c50'];
+  }
+  return null;
+}
+
+// A fixed pseudo-random value for each cell and step, so a cell holds a glyph between steps.
+function hash(a, b) {
+  let h = Math.imul(a ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(b + 0x632be5ab, 0xc2b2ae35);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  return ((h ^ (h >>> 13)) >>> 0) / 4294967296;
+}
+
+const random = (a, b) => a + Math.random() * (b - a);
+const probe = document.querySelector('.probe');
+let rows = [], cells = [];
+
+// The grid is rebuilt for each viewport, since the number of columns follows its width.
+function build() {
+  for (const row of rows) row.el.remove();
+  const cellH = innerHeight / ROWS;
+  const cellW = probe.getBoundingClientRect().width / 1000 * cellH;
+  const cols = Math.ceil(innerWidth / cellW);
+  const left = (innerWidth - cols * cellW) / 2;
+  const scale = Math.min(innerHeight * 0.7 / 1.11, innerWidth * 0.84 / 1.12);
+  const groundX = innerWidth / 2 - 0.05 * scale;
+  const groundY = innerHeight / 2 + 0.57 * scale;
+  document.body.style.setProperty('--size', `${cellH}px`);
+  rows = [];
+  cells = [];
+  for (let r = 0; r < ROWS; r++) {
+    const el = document.createElement('div');
+    el.className = 'row';
+    el.style.transform = `translate(${left.toFixed(1)}px, ${(r * cellH).toFixed(1)}px)`;
+    document.body.append(el);
+    const row = { el, cells: [], html: '' };
+    for (let c = 0; c < cols; c++) {
+      const x = (left + (c + 0.5) * cellW - groundX) / scale;
+      const y = (groundY - (r + 0.5) * cellH) / scale;
+      const [char, color] = artAt(x, y, cellH / scale) ?? [' ', NOISE];
+      // Noise rains in from the top, the picture resolves outward from the foot of the
+      // stem, and a sideways sweep scrambles it away again.
+      const reach = Math.min(1, Math.hypot(x * 0.8, y * 1.05) / 1.25);
+      const across = Math.min(1, Math.max(0, (c / cols) * 0.85 + (r / ROWS) * 0.15));
+      const tOut = 9.7 + 2.0 * across + random(0, 0.3);
+      const cell = {
+        id: r * 997 + c, char, color,
+        tIn: 0.15 + 1.4 * (r / ROWS) + random(0, 0.3),
+        tRes: 2.6 + 4.0 * reach + random(-0.25, 0.25),
+        tOut, tOff: tOut + random(0.6, 1.5),
+        rate: random(10, 22) * (calm ? 0.25 : 1),
+      };
+      row.cells.push(cell);
+      cells.push(cell);
+    }
+    rows.push(row);
+  }
+}
+
+// One glyph of noise; about half the field is left blank so it reads as texture, not a wall.
+function noise(cell, c, density) {
+  const step = Math.floor(c * cell.rate);
+  if (hash(cell.id, step * 2 + 1) > density) return ' ';
+  return POOL[Math.floor(hash(cell.id, step * 2) * POOL.length)];
+}
+
+// Each cell's glyph and colour at time `c` in the cycle.
+function glyph(cell, c) {
+  if (c < cell.tIn || c >= cell.tOff) return [' ', NOISE];
+  if (c < cell.tRes - 0.55) return [noise(cell, c, 0.5), NOISE];
+  // Just ahead of the lock, the cell already wears its final colour.
+  if (c < cell.tRes) return [cell.char === ' ' ? noise(cell, c, 0.3) : noise(cell, c, 1), cell.color];
+  if (c < cell.tOut) {
+    // A few cells shiver while it holds, more of them as the sweep approaches.
+    const nervous = 0.003 + 0.08 * Math.max(0, 1 - (cell.tOut - c) / 0.8);
+    if (cell.char !== ' ' && hash(cell.id, Math.floor(c * 9) + 7919) < nervous) return [noise(cell, c, 1), cell.color];
+    return [cell.char, cell.color];
+  }
+  const fading = (c - cell.tOut) / (cell.tOff - cell.tOut);
+  return [noise(cell, c, 0.55 * (1 - fading)), fading < 0.25 && cell.char !== ' ' ? cell.color : NOISE];
+}
+
+// A row is written as runs of one colour, and only when its text has changed.
+function render(row, c) {
+  let html = '', run = '', color = null;
+  for (const cell of row.cells) {
+    const [char, tone] = glyph(cell, c);
+    if (tone !== color && char !== ' ') {
+      if (run) html += color ? `<span style="color:${color}">${run}</span>` : run;
+      run = '';
+      color = tone;
+    }
+    run += char;
+  }
+  html += color ? `<span style="color:${color}">${run}</span>` : run;
+  if (html !== row.html) row.el.innerHTML = row.html = html;
+}
+
+addEventListener('resize', build);
+build();
+
+let lastTick = -1;
+function frame(ms) {
+  const tick = Math.floor(ms / 1000 / TICK);
+  if (tick !== lastTick) {
+    lastTick = tick;
+    const c = (tick * TICK) % CYCLE;
+    for (const row of rows) render(row, c);
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

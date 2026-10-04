@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Sort</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #8c9799; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+// Pixels along the shorter side of the sorted image.
+const GRID = 300;
+const SWEEP_SECONDS = 14;
+
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+
+const vertex = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+// Pass 1: the mushroom at dusk, a photograph with enough tonal range to sort.
+const sceneFragment = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform float uYaw;
+out vec4 outColor;
+
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom: ground at y = 0, cap top near y = 1.11, cap about 1.12 wide.
+// Returns distance and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom(vec3 p) {
+  p.x -= 0.05 * p.y * p.y;                       // a slight lean
+  float r = length(p.xz);
+
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43) * 0.8;
+
+  float frill = 0.008 * sin(atan(p.z, p.x) * 9.0);
+  float skirt = abs(r - (0.096 + (0.66 - p.y) * 0.32 + frill * smoothstep(0.64, 0.56, p.y))) - 0.009;
+  float ring = max(skirt, abs(p.y - 0.605) - 0.05) * 0.7;
+
+  vec3 c = p - vec3(0.0, 0.8, 0.0);
+  float dome = sdEllipsoid(c, vec3(0.56, 0.31, 0.56));
+  dome += 0.008 * sin(c.x * 11.0 + 1.3) * sin(c.z * 9.0) * sin(c.y * 7.0 + c.x * 5.0);
+  float under = 0.82 + 0.08 * (1.0 - min(r * r / 0.31, 1.0));
+  float cap = max(dome, under - p.y);
+  float gills = max(dome + 0.02, max(p.y - under - 0.004, under - 0.04 - p.y));
+
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  float body = smin(stem, max(cap, gills), 0.03);
+  if (body < res.x - 0.001) res = vec2(body, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+
+vec2 map(vec3 p) {
+  vec2 m = mushroom(p);
+  if (p.y < m.x) m = vec2(p.y, 4.0);
+  return m;
+}
+
+vec3 normalAt(vec3 p) {
+  vec2 e = vec2(0.0015, 0.0);
+  return normalize(vec3(map(p + e.xyy).x - map(p - e.xyy).x,
+                        map(p + e.yxy).x - map(p - e.yxy).x,
+                        map(p + e.yyx).x - map(p - e.yyx).x));
+}
+
+float softShadow(vec3 ro, vec3 rd) {
+  float res = 1.0, t = 0.02;
+  for (int i = 0; i < 40; i++) {
+    float h = mushroom(ro + rd * t).x;
+    res = min(res, 10.0 * h / t);
+    t += clamp(h, 0.01, 0.15);
+    if (res < 0.002 || t > 4.0) break;
+  }
+  return clamp(res, 0.0, 1.0);
+}
+
+float warts(vec3 p) {
+  vec3 g = p * 10.0;
+  vec3 i = floor(g), f = fract(g);
+  float d = 1e9;
+  for (int z = -1; z <= 1; z++)
+  for (int y = -1; y <= 1; y++)
+  for (int x = -1; x <= 1; x++) {
+    vec3 o = vec3(x, y, z);
+    vec3 j = o + vec3(hash(i + o), hash(i + o + 7.1), hash(i + o + 3.7));
+    d = min(d, length(j - f) * (0.7 + 0.6 * hash(i + o + 1.3)));
+  }
+  return 1.0 - smoothstep(0.18, 0.26, d);
+}
+
+vec3 material(vec3 p, vec3 n, float part) {
+  vec3 q = p; q.x -= 0.05 * q.y * q.y;
+  float r = length(q.xz);
+  if (part < 0.5) {
+    vec3 cap = mix(vec3(0.43, 0.07, 0.04), vec3(0.72, 0.2, 0.1), smoothstep(0.2, 0.56, r));
+    return mix(cap, vec3(0.94, 0.91, 0.84), warts(q - vec3(0.0, 0.8, 0.0)) * smoothstep(0.0, 0.3, n.y + 0.2));
+  }
+  if (part < 1.5) return vec3(0.82, 0.78, 0.68) * (0.75 + 0.25 * cos(atan(q.z, q.x) * 70.0));
+  return mix(vec3(0.78, 0.75, 0.68), vec3(0.93, 0.9, 0.83), smoothstep(0.0, 0.3, q.y));
+}
+
+const vec3 HAZE = vec3(0.55, 0.59, 0.6);
+const vec3 SLATE = vec3(0.13, 0.16, 0.2);
+
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(vec3(i, 0.0)), hash(vec3(i + vec2(1, 0), 0.0)), f.x),
+             mix(hash(vec3(i + vec2(0, 1), 0.0)), hash(vec3(i + vec2(1, 1), 0.0)), f.x), f.y);
+}
+
+// Fine leaf litter, sharp only near the mushroom: a shallow depth of field
+// melts it into an even tone in front and behind.
+vec3 forestFloor(vec2 xz, float distance, float shadow) {
+  float litter = noise(xz * 14.0) * 0.55 + noise(xz * 31.0) * 0.45;
+  litter = mix(0.5, litter, smoothstep(1.2, 0.2, abs(distance - 3.3)));
+  vec3 ground = mix(vec3(0.13, 0.1, 0.07), vec3(0.55, 0.39, 0.23), smoothstep(0.25, 0.75, litter));
+  float pool = smoothstep(2.4, 0.3, length(xz));
+  return ground * (0.15 + 0.95 * pool * (0.3 + 0.7 * shadow));
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / min(uResolution.x, uResolution.y);
+  vec3 target = vec3(0.0, 0.55, 0.0);
+  vec3 ro = target + vec3(sin(uYaw), 0.22, cos(uYaw)) * 3.3;
+  vec3 fw = normalize(target - ro);
+  vec3 rt = normalize(cross(fw, vec3(0, 1, 0)));
+  vec3 up = cross(rt, fw);
+  vec3 rd = normalize(uv.x * rt + uv.y * up + 2.0 * fw);
+  // A low sun behind the viewer's left shoulder; the mushroom turns beneath it.
+  vec3 sun = normalize(-0.8 * rt + vec3(0.0, 0.45, 0.0) + 0.4 * vec3(sin(uYaw), 0.0, cos(uYaw)));
+
+  vec3 col = mix(HAZE, SLATE, smoothstep(0.0, 0.1, rd.y));
+  float t = 0.0;
+  vec2 hit = vec2(-1.0);
+  for (int i = 0; i < 90; i++) {
+    vec2 m = map(ro + rd * t);
+    if (m.x < 0.001 * t) { hit = vec2(t, m.y); break; }
+    t += m.x;
+    if (t > 8.0) break;
+  }
+
+  if (hit.x > 0.0) {
+    vec3 p = ro + rd * hit.x;
+    vec3 n = normalAt(p);
+    float shadow = softShadow(p + n * 0.003, sun);
+    if (hit.y > 3.5) {
+      col = mix(forestFloor(p.xz, hit.x, shadow), HAZE, smoothstep(3.0, 8.0, hit.x));
+    } else {
+      vec3 albedo = material(p, n, hit.y);
+      float diff = max(dot(n, sun), 0.0) * shadow;
+      float skyLight = 0.5 + 0.5 * n.y;
+      float bounce = 0.5 - 0.5 * n.y;
+      col = albedo * (vec3(1.1, 0.88, 0.66) * diff * 1.3 + vec3(0.32, 0.4, 0.5) * skyLight * 0.6 + vec3(0.3, 0.2, 0.13) * bounce);
+    }
+  }
+  // Alpha fades the sort out with the fog and leaves the sky out entirely:
+  // flat haze would only punch holes in the picture.
+  float sortable = step(0.0, hit.x) * smoothstep(5.5, 3.5, hit.x);
+  outColor = vec4(clamp(col, 0.0, 1.0), sortable);
+}`;
+
+const displayFragment = `#version 300 es
+precision highp float;
+uniform sampler2D uImage;
+uniform vec2 uResolution;
+out vec4 outColor;
+void main() {
+  outColor = vec4(texture(uImage, gl_FragCoord.xy / uResolution).rgb, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+function createProgram(fragment) {
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+  gl.bindAttribLocation(program, 0, 'position');
+  gl.linkProgram(program);
+  return program;
+}
+
+const scene = createProgram(sceneFragment);
+const display = createProgram(displayFragment);
+const sceneResolution = gl.getUniformLocation(scene, 'uResolution');
+const sceneYaw = gl.getUniformLocation(scene, 'uYaw');
+const displayResolution = gl.getUniformLocation(display, 'uResolution');
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+// The scene renders into this texture, is read back, sorted, and written over it.
+const image = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, image);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+const imageBuffer = gl.createFramebuffer();
+
+let size, pixels, value, span;
+function resize() {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width === w && canvas.height === h) return;
+  canvas.width = w;
+  canvas.height = h;
+  const scale = Math.min(GRID, w, h) / Math.min(w, h);
+  size = [Math.round(w * scale), Math.round(h * scale)];
+  pixels = new Uint8Array(size[0] * size[1] * 4);
+  value = new Uint8Array(size[0] * size[1]);
+  span = new Uint32Array(size[1]);
+  gl.bindTexture(gl.TEXTURE_2D, image);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, size[0], size[1], 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  // Whole sorted pixels read as the medium; soften only when they are under two screen pixels.
+  const filter = h / size[1] >= 2 ? gl.NEAREST : gl.LINEAR;
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, imageBuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, image, 0);
+}
+
+function columnJitter(x) {
+  const s = Math.sin(x * 12.9898) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+// How hard one sweep sorts a column: a sharp front travels left to right and
+// the columns behind it slowly heal back into the photograph.
+function sweepStrength(x, width, phase) {
+  const front = -0.1 + 1.9 * (phase % 1);
+  const ahead = x / width - front + (columnJitter(x) - 0.5) * 0.06;
+  if (ahead > 0) return Math.max(0, 1 - ahead / 0.03);
+  return Math.min(1, Math.max(0, 1 - (-ahead - 0.35) / 0.5));
+}
+
+// Two sweeps half a cycle apart, so one is always on screen.
+function sortStrength(x, width, seconds) {
+  const phase = seconds / SWEEP_SECONDS + 0.3;
+  return Math.max(sweepStrength(x, width, phase), sweepStrength(x, width, phase + 0.5));
+}
+
+// Sorts one vertical run by value, brightest at the bottom so lit tops pour
+// downward. The key is packed above RGB so a plain numeric sort orders whole pixels.
+function sortSpan(x, start, end, width) {
+  const count = end - start;
+  for (let k = 0; k < count; k++) {
+    const i = (start + k) * width + x;
+    span[k] = (value[i] << 24) | (pixels[i * 4] << 16) | (pixels[i * 4 + 1] << 8) | pixels[i * 4 + 2];
+  }
+  const sorted = span.subarray(0, count).sort();
+  for (let k = 0; k < count; k++) {
+    const i = (end - 1 - k) * width + x;
+    pixels[i * 4] = (sorted[k] >> 16) & 255;
+    pixels[i * 4 + 1] = (sorted[k] >> 8) & 255;
+    pixels[i * 4 + 2] = sorted[k] & 255;
+  }
+}
+
+// Classic interval sorting: runs of pixels brighter than a threshold are
+// sorted, and darker pixels break the runs. Brightness is the HSV value, the
+// largest channel, so the saturated red cap counts as bright as the stem and
+// pours with it. The scene's alpha dims what it wants left alone. Stronger
+// columns lower the threshold and allow longer runs, and a per-column jitter
+// keeps the runs from starting along one straight line.
+function pixelSort(width, height, seconds) {
+  for (let i = 0; i < width * height; i++) {
+    value[i] = (Math.max(pixels[i * 4], pixels[i * 4 + 1], pixels[i * 4 + 2]) * pixels[i * 4 + 3]) >> 8;
+  }
+  for (let x = 0; x < width; x++) {
+    const strength = sortStrength(x, width, seconds);
+    if (strength <= 0) continue;
+    const threshold = 255 * (0.75 - 0.65 * strength + (columnJitter(x + 0.5) - 0.5) * 0.16);
+    const longest = Math.round(height * (0.15 + 0.6 * strength));
+    let y = 0;
+    while (y < height) {
+      while (y < height && value[y * width + x] < threshold) y++;
+      const start = y;
+      while (y < height && y - start < longest && value[y * width + x] >= threshold) y++;
+      if (y - start > 1) sortSpan(x, start, y, width);
+    }
+  }
+}
+
+function frame(ms) {
+  resize();
+  const seconds = ms / 1000;
+  const [width, height] = size;
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, imageBuffer);
+  gl.viewport(0, 0, width, height);
+  gl.useProgram(scene);
+  gl.uniform2f(sceneResolution, width, height);
+  gl.uniform1f(sceneYaw, 0.6 + seconds * 0.2);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+  pixelSort(width, height, seconds);
+  gl.bindTexture(gl.TEXTURE_2D, image);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(display);
+  gl.uniform2f(displayResolution, canvas.width, canvas.height);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

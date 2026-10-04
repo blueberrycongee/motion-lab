@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parallax</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: linear-gradient(#cdd3c3, #ece4c9 55%, #d9d8c2); }
+  /* Each layer overhangs the view so the camera can drift without exposing an edge;
+     one SVG unit is 1vmin, with the origin at the centre of the view. */
+  .layer {
+    position: absolute; left: -30vmin; top: -15vmin;
+    width: calc(100vw + 60vmin); height: calc(100vh + 30vmin);
+  }
+  .fore { filter: blur(0.5vmin); }
+  .far { filter: blur(0.15vmin); }
+  .ray { mix-blend-mode: soft-light; animation: shimmer 9s ease-in-out infinite alternate; }
+  .ray:nth-child(2n) { animation-duration: 13s; animation-delay: -4s; }
+  .mote { animation: rise linear infinite; }
+  .frond { transform-box: fill-box; transform-origin: 50% 100%; animation: sway 6s ease-in-out infinite alternate; }
+  @keyframes shimmer { from { opacity: 0.35; } to { opacity: 0.85; } }
+  @keyframes rise {
+    0% { translate: 0 0; opacity: 0; }
+    15%, 70% { opacity: 1; }
+    100% { translate: 6px -40px; opacity: 0; }
+  }
+  @keyframes sway { from { rotate: -2.5deg; } to { rotate: 2.5deg; } }
+  @media (prefers-reduced-motion: reduce) {
+    .ray, .mote, .frond { animation: none; }
+  }
+</style>
+</head>
+<body>
+<svg class="layer far" data-depth="6"></svg>
+<svg class="layer" data-depth="3.2"></svg>
+<svg class="layer" data-depth="1.8"></svg>
+<svg class="layer hero" data-depth="1">
+  <defs>
+    <radialGradient id="cap-shade" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6e130b"/>
+      <stop offset="1" stop-color="#b8321a"/>
+    </radialGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff6dc" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#fff6dc" stop-opacity="0"/>
+    </linearGradient>
+    <g id="mushroom">
+      <path fill="#e8e2d2" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+      <path fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+      <path fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+      <path fill="url(#cap-shade)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+      <g fill="#efe7d6">
+        <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+        <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+        <ellipse cx="-188" cy="-1030" rx="28" ry="22"/>
+        <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+        <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+        <ellipse cx="92" cy="-990" rx="34" ry="27"/>
+        <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+        <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+        <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+        <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+        <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+        <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+        <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+        <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+      </g>
+    </g>
+  </defs>
+</svg>
+<svg class="layer fore" data-depth="0.55"></svg>
+<script type="module">
+const NS = 'http://www.w3.org/2000/svg';
+const FOG = [207, 214, 200];
+const SHADE = [24, 38, 31];
+const layers = [...document.querySelectorAll('.layer')];
+const [far, mid, near, hero, fore] = layers;
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// A repeatable random sequence, so the forest is the same on every visit.
+let seed = 7;
+function random() {
+  seed = (seed * 16807) % 2147483647;
+  return seed / 2147483647;
+}
+
+// Farther things take on more of the morning fog.
+function fogged(amount) {
+  const [r, g, b] = SHADE.map((c, i) => Math.round(c + (FOG[i] - c) * amount));
+  return `rgb(${r} ${g} ${b})`;
+}
+
+function add(layer, tag, attributes) {
+  const node = document.createElementNS(NS, tag);
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+  layer.append(node);
+  return node;
+}
+
+// A spruce in tiers of drooping branches, each wider than the one above.
+function spruce(x, base, height) {
+  const width = height * 0.17;
+  let left = '', right = '';
+  for (let tier = 1; tier <= 5; tier++) {
+    const y = base - height * (1 - tier * 0.18);
+    left = `L${x - width * tier * 0.2} ${y} L${x - width * tier * 0.12} ${y - height * 0.05} ` + left;
+    right += `L${x + width * tier * 0.12} ${y - height * 0.05} L${x + width * tier * 0.2} ${y} `;
+  }
+  return `M${x - width * 0.12} ${base} ${left}L${x} ${base - height} ${right}L${x + width * 0.12} ${base} Z`;
+}
+
+function forest(layer, count, base, height, fog) {
+  let d = '';
+  for (let i = 0; i < count; i++) {
+    d += spruce(-150 + 300 * (i + random() * 0.8) / count, base + random() * 4, height * (0.65 + 0.5 * random()));
+  }
+  add(layer, 'path', { d, fill: fogged(fog) });
+}
+
+function trunks(layer, xs, base, width, fog) {
+  for (const x of xs) {
+    const w = width * (0.7 + 0.6 * random());
+    add(layer, 'path', { d: `M${x - w} ${base} L${x - w * 0.8} -120 L${x + w * 0.8} -120 L${x + w} ${base} Z`, fill: fogged(fog) });
+  }
+}
+
+function ground(layer, top, fill) {
+  let d = 'M-160 120';
+  for (let x = -160; x <= 160; x += 10) d += ` L${x} ${top + 2.5 * Math.sin(x * 0.05) + 1.5 * Math.sin(x * 0.13 + 1)}`;
+  add(layer, 'path', { d: `${d} L160 120 Z`, fill });
+}
+
+function motes(layer, count, size) {
+  for (let i = 0; i < count; i++) {
+    const mote = add(layer, 'circle', { class: 'mote', cx: -90 + 180 * random(), cy: -50 + 90 * random(), r: size * (0.5 + random()), fill: '#fff8e2' });
+    mote.style.animationDuration = `${9 + 8 * random()}s`;
+    mote.style.animationDelay = `${-17 * random()}s`;
+  }
+}
+
+ground(far, 6, fogged(0.86));
+forest(far, 46, 7, 34, 0.78);
+forest(mid, 22, 13, 62, 0.6);
+trunks(mid, [-104, -61, 47, 95], 14, 1.6, 0.6);
+ground(mid, 13, fogged(0.62));
+for (const x of [-46, -14, 24, 60]) {
+  add(mid, 'polygon', { class: 'ray', points: `${x - 18} -120 ${x - 7} -120 ${x + 34} 40 ${x + 14} 40`, fill: 'url(#beam)' });
+}
+motes(mid, 14, 0.25);
+trunks(near, [-88, -55, 70, 120], 21, 3.6, 0.32);
+ground(near, 21, fogged(0.38));
+
+ground(hero, 30, '#334128');
+add(hero, 'ellipse', { cx: 2, cy: 30.5, rx: 30, ry: 2.4, fill: '#1f2a19', opacity: 0.6 });
+// The mushroom is 1110 units tall: the hero stands 55vmin, its offspring a fraction of that.
+for (const [x, y, scale] of [[-31, 31, 0.012], [27, 30.5, 0.008], [35, 31.5, 0.014], [0, 30.5, 0.05]]) {
+  add(hero, 'use', { href: '#mushroom', transform: `translate(${x} ${y}) scale(${scale})` });
+}
+motes(hero, 10, 0.35);
+
+ground(fore, 46, '#18210f');
+for (const [x, height, lean] of [[-74, 38, -24], [-62, 30, 10], [-50, 24, 30], [66, 34, 22], [80, 40, -8], [93, 28, -30]]) {
+  const frond = add(fore, 'path', {
+    class: 'frond', fill: '#1d2a15',
+    d: `M${x - 1.5} 48 Q${x + lean * 0.3} ${48 - height * 0.6} ${x + lean} ${48 - height} Q${x + lean * 0.4 + 2} ${48 - height * 0.5} ${x + 1.5} 48 Z`,
+  });
+  frond.style.animationDelay = `${-x * 0.07}s`;
+}
+
+// Keep one SVG unit equal to 1vmin as the window changes shape.
+function fit() {
+  const unit = Math.min(innerWidth, innerHeight) / 100;
+  const w = innerWidth / unit + 60, h = innerHeight / unit + 30;
+  for (const layer of layers) layer.setAttribute('viewBox', `${-w / 2} ${-h / 2} ${w} ${h}`);
+}
+fit();
+addEventListener('resize', fit);
+
+let pointer = { x: 0, y: 0 };
+let look = { x: 0, y: 0 };
+addEventListener('pointermove', (event) => {
+  pointer = { x: event.clientX / innerWidth - 0.5, y: event.clientY / innerHeight - 0.5 };
+});
+
+// The camera drifts on a slow arc around the mushroom. A layer's shift is proportional
+// to 1/depth, measured against a pivot just behind the mushroom so it stays near centre.
+const PIVOT = 1.25;
+function frame(ms) {
+  const t = ms / 1000 * (calm ? 0.3 : 1);
+  look.x += (pointer.x - look.x) * 0.04;
+  look.y += (pointer.y - look.y) * 0.04;
+  const camX = 16 * Math.sin(t * 0.13) + 5 * Math.sin(t * 0.29 + 1) + 14 * look.x;
+  const camY = 3 * Math.sin(t * 0.21) + 6 * look.y;
+  const push = 0.03 * (1 - Math.cos(t * 0.09));
+  for (const layer of layers) {
+    const k = 1 / layer.dataset.depth - 1 / PIVOT;
+    layer.style.translate = `${-camX * k}vmin ${-camY * k}vmin`;
+    layer.style.scale = `${1 + push * k * 2}`;
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spores</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1b2016; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const ctx = canvas.getContext('2d');
+
+// The mushroom in profile as Path2D, in mushroom units: y up, ground at 0,
+// cap about 1.12 wide, top near 1.11. Draw with ctx.setTransform(s, 0, 0, -s, x, groundY).
+function mushroomPaths() {
+  const lean = (y) => 0.05 * y * y;
+  const stemR = (y) => 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  const outline = (y0, y1, radius) => {
+    const path = new Path2D();
+    const n = 32;
+    for (let i = 0; i <= n; i++) {
+      const y = y0 + (y1 - y0) * (i / n);
+      path.lineTo(lean(y) + radius(y), y);
+    }
+    for (let i = n; i >= 0; i--) {
+      const y = y0 + (y1 - y0) * (i / n);
+      path.lineTo(lean(y) - radius(y), y);
+    }
+    path.closePath();
+    return path;
+  };
+  const stem = outline(0, 0.86, stemR);
+  const ring = outline(0.555, 0.655, (y) => 0.096 + (0.66 - y) * 0.32);
+
+  const cx = lean(0.8), a = Math.asin(0.02 / 0.31);
+  const cap = new Path2D();
+  cap.ellipse(cx, 0.8, 0.56, 0.31, 0, a, Math.PI - a);
+  cap.quadraticCurveTo(cx, 0.86, cx + 0.559, 0.82);
+  cap.closePath();
+
+  const gills = new Path2D();
+  gills.moveTo(cx - 0.55, 0.822);
+  gills.quadraticCurveTo(cx, 0.862, cx + 0.55, 0.822);
+  gills.lineTo(cx + 0.52, 0.8);
+  gills.quadraticCurveTo(cx, 0.83, cx - 0.52, 0.8);
+  gills.closePath();
+
+  // Warts on the visible face of the cap: [x, y, radius].
+  const spots = [
+    [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+    [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+    [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+    [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+  ].map(([x, y, r]) => {
+    const path = new Path2D();
+    path.ellipse(cx + x, y, r, r * 0.8, 0, 0, Math.PI * 2);
+    return path;
+  });
+  return { cap, gills, stem, ring, spots };
+}
+
+const smoothstep = (a, b, v) => {
+  const t = Math.min(Math.max((v - a) / (b - a), 0), 1);
+  return t * t * (3 - 2 * t);
+};
+
+// Air currents: a slowly turning breeze plus a stream function made of a few
+// travelling waves. Flow derived from a stream function is divergence-free,
+// so the spores swirl into eddies instead of bunching up or thinning out.
+const waves = [
+  [1.6, 2.3, 0.31, 0.06, 0.0], [-2.4, 1.9, -0.23, 0.05, 1.7],
+  [3.9, -2.6, 0.47, 0.03, 4.1], [-5.3, -3.8, -0.39, 0.02, 2.6],
+  [7.1, 5.2, 0.62, 0.008, 0.9],
+];
+
+function airflow(x, y, t) {
+  // The breeze turns slowly, so the plume swings from side to side.
+  let u = 0.03 + 0.11 * Math.sin(t * 0.09), v = 0.05;
+  for (const [kx, ky, w, a, phase] of waves) {
+    const c = a * Math.cos(kx * x + ky * y + w * t + phase);
+    u += c * ky;
+    v -= c * kx;
+  }
+  // The cap shelters the still air beneath it.
+  const calm = 1 - 0.7 * smoothstep(0.7, 0.35, Math.abs(x - 0.03)) * smoothstep(1.0, 0.8, y);
+  return [u * calm, v * calm];
+}
+
+// Where the sunbeam crosses the scene: 1 on its axis, falling off to 0.
+function beam(x, y) {
+  const d = (x - 0.35) * 0.87 + (y - 0.6) * 0.5;
+  return Math.exp(-d * d * 6);
+}
+
+const COUNT = 12000;
+const px = new Float32Array(COUNT), py = new Float32Array(COUNT);
+const age = new Float32Array(COUNT), life = new Float32Array(COUNT), grain = new Float32Array(COUNT);
+
+function release(i) {
+  px[i] = 0.032 + (Math.random() * 2 - 1) * 0.5;
+  py[i] = 0.805 - Math.random() * 0.02;
+  age[i] = 0;
+  life[i] = 7 + Math.random() * 9;
+  grain[i] = 0.5 + Math.random() * Math.random() * 1.5;
+}
+
+// A few spores drift close to the lens: out of focus, larger and faster.
+const MOTES = 24;
+const mote = Array.from({ length: MOTES }, () => ({ x: 0, y: 0, size: 0, age: 0, life: 0 }));
+
+function releaseMote(m) {
+  m.x = (Math.random() * 2 - 1) * view.w / view.s * 0.6;
+  m.y = Math.random() * view.y / view.s;
+  m.size = 0.012 + Math.random() * 0.03;
+  m.age = 0;
+  m.life = 5 + Math.random() * 6;
+}
+
+let view = { s: 1, x: 0, y: 0, w: 1, h: 1 };
+
+function step(dt, t) {
+  const halfW = view.w / 2 / view.s + 0.1, top = view.y / view.s + 0.1;
+  for (let i = 0; i < COUNT; i++) {
+    const [u, v] = airflow(px[i], py[i], t);
+    // Freshly shed spores drop out of the gills before the air takes them.
+    const drop = 0.12 * Math.exp(-age[i] * 0.5);
+    px[i] += u * dt;
+    py[i] += (v - drop) * dt;
+    age[i] += dt;
+    if (age[i] > life[i] || py[i] < 0 || py[i] > top || Math.abs(px[i]) > halfW) release(i);
+  }
+  for (const m of mote) {
+    const [u, v] = airflow(m.x, m.y, t);
+    m.x += u * 1.8 * dt;
+    m.y += v * 1.8 * dt;
+    m.age += dt;
+    if (m.age > m.life) releaseMote(m);
+  }
+}
+
+const paths = mushroomPaths();
+
+function drawBackdrop() {
+  const { s, x, y, w, h } = view;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const air = ctx.createLinearGradient(0, 0, 0, y);
+  air.addColorStop(0, '#161b13');
+  air.addColorStop(1, '#2c3020');
+  ctx.fillStyle = air;
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.setTransform(s, 0, 0, -s, x, y);
+  const shaft = ctx.createLinearGradient(0.35 - 0.7 * 0.87, 0.6 - 0.7 * 0.5, 0.35 + 0.7 * 0.87, 0.6 + 0.7 * 0.5);
+  shaft.addColorStop(0, 'rgba(255, 222, 160, 0)');
+  shaft.addColorStop(0.5, 'rgba(255, 222, 160, 0.11)');
+  shaft.addColorStop(1, 'rgba(255, 222, 160, 0)');
+  ctx.fillStyle = shaft;
+  ctx.fillRect(-20, -20, 40, 40);
+
+  const floor = ctx.createLinearGradient(0, 0.02, 0, -0.5);
+  floor.addColorStop(0, '#1d2015');
+  floor.addColorStop(1, '#0e100b');
+  ctx.fillStyle = floor;
+  ctx.fillRect(-20, -20, 40, 20.02);
+  const contact = ctx.createRadialGradient(0, 0, 0, 0, 0, 0.32);
+  contact.addColorStop(0, 'rgba(5, 6, 3, 0.7)');
+  contact.addColorStop(1, 'rgba(5, 6, 3, 0)');
+  ctx.save();
+  ctx.scale(1, 0.18);
+  ctx.fillStyle = contact;
+  ctx.fillRect(-0.4, -0.4, 0.8, 0.8);
+  ctx.restore();
+}
+
+function drawMushroom() {
+  ctx.setTransform(view.s, 0, 0, -view.s, view.x, view.y);
+  // The beam comes from the upper left: lit on that side, shaded on the other.
+  const stem = ctx.createLinearGradient(-0.12, 0, 0.16, 0);
+  stem.addColorStop(0, '#e8e2d2');
+  stem.addColorStop(1, '#8c877a');
+  ctx.fillStyle = stem;
+  ctx.fill(paths.stem);
+  const underCap = ctx.createLinearGradient(0, 0.8, 0, 0.45);
+  underCap.addColorStop(0, 'rgba(20, 16, 10, 0.55)');
+  underCap.addColorStop(1, 'rgba(20, 16, 10, 0)');
+  ctx.fillStyle = underCap;
+  ctx.fill(paths.stem);
+  ctx.fillStyle = stem;
+  ctx.fill(paths.ring);
+  ctx.fillStyle = '#9b917c';
+  ctx.fill(paths.gills);
+
+  const cap = ctx.createRadialGradient(-0.05, 1.08, 0.02, 0.03, 0.9, 0.62);
+  cap.addColorStop(0, '#6e130b');
+  cap.addColorStop(1, '#b8321a');
+  ctx.fillStyle = cap;
+  ctx.fill(paths.cap);
+  const light = ctx.createLinearGradient(-0.5, 1.0, 0.55, 0.8);
+  light.addColorStop(0, 'rgba(255, 200, 150, 0.14)');
+  light.addColorStop(1, 'rgba(30, 5, 0, 0.35)');
+  ctx.fillStyle = light;
+  ctx.fill(paths.cap);
+  paths.spots.forEach((spot, i) => {
+    ctx.fillStyle = i % 3 ? '#efe7d6' : '#d9cfbb';
+    ctx.fill(spot);
+  });
+}
+
+// Spores are drawn in a few brightness bands so each band is one fill call.
+const BANDS = 5;
+
+function drawSpores() {
+  const { s, x, y } = view;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const bands = Array.from({ length: BANDS }, () => new Path2D());
+  const unit = Math.max(s * 0.0026, 0.8);
+  for (let i = 0; i < COUNT; i++) {
+    const fade = smoothstep(0, 0.6, age[i]) * smoothstep(life[i], life[i] - 2.5, age[i]);
+    const bright = fade * (0.18 + 0.82 * beam(px[i], py[i]));
+    const band = Math.min(BANDS - 1, Math.floor(bright * BANDS));
+    if (bright < 0.04) continue;
+    const r = unit * grain[i];
+    bands[band].rect(x + px[i] * s - r / 2, y - py[i] * s - r / 2, r, r);
+  }
+  ctx.globalCompositeOperation = 'lighter';
+  for (let b = 0; b < BANDS; b++) {
+    ctx.fillStyle = `rgba(246, 238, 220, ${((b + 1) / BANDS) ** 1.5 * 0.8})`;
+    ctx.fill(bands[b]);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function drawMotes() {
+  const { s, x, y } = view;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'lighter';
+  for (const m of mote) {
+    const fade = smoothstep(0, 1.5, m.age) * smoothstep(m.life, m.life - 2, m.age);
+    const r = m.size * s;
+    const disc = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+    const alpha = fade * (0.04 + 0.14 * beam(m.x, m.y));
+    disc.addColorStop(0, `rgba(255, 236, 200, ${alpha})`);
+    disc.addColorStop(0.7, `rgba(255, 236, 200, ${alpha * 0.8})`);
+    disc.addColorStop(1, 'rgba(255, 236, 200, 0)');
+    ctx.setTransform(1, 0, 0, 1, x + m.x * s, y - m.y * s);
+    ctx.fillStyle = disc;
+    ctx.fillRect(-r, -r, 2 * r, 2 * r);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width === w && canvas.height === h) return;
+  canvas.width = w;
+  canvas.height = h;
+  const s = Math.min(w, h) * 0.6;
+  view = { s, x: w / 2, y: h / 2 + 0.58 * s, w, h };
+}
+
+resize();
+for (let i = 0; i < COUNT; i++) release(i);
+mote.forEach(releaseMote);
+// Run the air for a while first, so the first frame already has a drifting cloud.
+let simTime = 0;
+for (; simTime < 14; simTime += 1 / 30) step(1 / 30, simTime);
+
+let last = performance.now();
+function frame(ms) {
+  const dt = Math.min((ms - last) / 1000, 0.05);
+  last = ms;
+  simTime += dt;
+  resize();
+  step(dt, simTime);
+  drawBackdrop();
+  drawSpores();
+  drawMushroom();
+  drawMotes();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

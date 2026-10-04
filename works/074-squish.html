@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Squish</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background:
+      linear-gradient(#0000 calc(var(--floor) - 0.4vmin), #9fb2ad calc(var(--floor) - 0.4vmin) var(--floor), #0000 var(--floor)),
+      linear-gradient(#d9e3df, #c9d6d1 var(--floor), #b7c7c1 var(--floor), #aebfb9);
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  body.held, body.held .mushroom { cursor: grabbing; }
+  .mushroom, .shadow { position: absolute; left: 0; top: 0; will-change: transform; }
+  .mushroom { width: min(50vmin, 42vw); outline: none; cursor: grab; }
+  .mushroom:focus-visible::after {
+    content: "";
+    position: absolute;
+    inset: -2vmin;
+    border: 0.4vmin solid #2f4a4466;
+    border-radius: 3vmin;
+  }
+  .mushroom svg { display: block; width: 100%; overflow: visible; }
+  .shadow {
+    width: min(50vmin, 42vw);
+    height: 4vmin;
+    border-radius: 50%;
+    background: radial-gradient(closest-side, #3f5650, #3f565000);
+  }
+</style>
+</head>
+<body>
+<div class="shadow"></div>
+<div class="mushroom" tabindex="0" role="img" aria-label="Mushroom you can throw">
+  <svg viewBox="-620 -1160 1240 1160">
+    <path fill="#e8e2d2" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+    <path fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+    <g class="cap">
+      <path fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+      <path fill="url(#capShade)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+      <g fill="#efe7d6">
+        <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+        <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+        <ellipse cx="-188" cy="-1030" rx="28" ry="22"/>
+        <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+        <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+        <ellipse cx="92" cy="-990" rx="34" ry="27"/>
+        <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+        <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+        <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+        <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+        <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+        <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+        <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+        <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+      </g>
+    </g>
+    <defs>
+      <radialGradient id="capShade" cx="-60" cy="-1110" r="660" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#6e130b"/>
+        <stop offset="1" stop-color="#b8321a"/>
+      </radialGradient>
+    </defs>
+  </svg>
+</div>
+<script type="module">
+const mushroom = document.querySelector('.mushroom');
+const cap = mushroom.querySelector('.cap');
+const shadow = document.querySelector('.shadow');
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const FLOOR = 0.86;
+const STEP = 1 / 240;
+const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+
+let W, H, w, h, floor;
+function measure() {
+  W = innerWidth;
+  H = innerHeight;
+  w = mushroom.offsetWidth;
+  h = mushroom.offsetHeight;
+  floor = H * FLOOR;
+  document.body.style.setProperty('--floor', `${floor}px`);
+}
+measure();
+
+// Position is the box centre in px. Strain (ex, ey) and the cap offset are springs
+// that impacts and accelerations kick; they ring down on their own.
+const s = {
+  x: W / 2, y: floor - h / 2, vx: 0, vy: 0,
+  angle: 0, spin: 0,
+  ex: 0, vex: 0, ey: 0, vey: 0,
+  stretch: 0,
+  capX: 0, capVX: 0, capY: 0, capVY: 0,
+};
+const give = calm ? 0.35 : 1;
+let held = null;
+
+function impact(axis, speed, side) {
+  // Resting contact re-collides every step; only real hits should deform it.
+  if (speed < H * 0.05) return;
+  const kick = Math.min(speed / H, 3) * 2.4 * give;
+  if (axis === 'y') s.vey -= kick;
+  else {
+    s.vex -= kick;
+    // The wall shoves the top of the cap back toward the room.
+    s.spin -= side * kick * 40;
+  }
+}
+
+function collide() {
+  const bounce = calm ? 0.3 : 0.55;
+  // A tilted cap reaches further sideways than the upright box.
+  const tilt = Math.abs(Math.sin(s.angle * Math.PI / 180));
+  const half = w / 2 + h * 0.35 * tilt;
+  if (s.x < half || s.x > W - half) {
+    const side = s.x < half ? -1 : 1;
+    s.x = clamp(s.x, half, W - half);
+    if (s.vx * side > 0) {
+      impact('x', Math.abs(s.vx), side);
+      s.vx *= -bounce;
+    }
+  }
+  if (s.y < h / 2) {
+    s.y = h / 2;
+    if (s.vy < 0) {
+      impact('y', -s.vy, 0);
+      s.vy *= -bounce;
+    }
+  }
+  if (s.y >= floor - h / 2) {
+    s.y = floor - h / 2;
+    if (s.vy > 0) {
+      impact('y', s.vy, 0);
+      s.vy = s.vy * bounce > H * 0.08 ? -s.vy * bounce : 0;
+    }
+    if (!held) s.vx *= Math.exp(-5 * STEP);
+  }
+}
+
+function step() {
+  const vx0 = s.vx, vy0 = s.vy;
+  if (held) {
+    // The hand pulls through a spring rather than pinning, so fast drags lag and stretch.
+    const k = 620, c = 2 * 0.7 * Math.sqrt(k);
+    s.vx += ((held.x - held.ox - s.x) * k - s.vx * c) * STEP;
+    s.vy += ((held.y - held.oy - s.y) * k - s.vy * c) * STEP;
+  } else {
+    s.vy += H * 2.8 * STEP;
+    s.vx *= 1 - 0.2 * STEP;
+  }
+  s.x += s.vx * STEP;
+  s.y += s.vy * STEP;
+  collide();
+
+  spring(s, 'ex', 'vex', 0, 520, 15);
+  spring(s, 'ey', 'vey', 0, 520, 15);
+  s.ex = clamp(s.ex, -0.35, 0.35);
+  s.ey = clamp(s.ey, -0.35, 0.35);
+
+  const speed = Math.hypot(s.vx, s.vy);
+  const target = Math.min(speed / (H * 9), 0.16) * give;
+  s.stretch += (target - s.stretch) * Math.min(14 * STEP, 1);
+
+  // Held, the heavy cap swings behind the hand; loose, the body rights itself like a weeble.
+  const lean = held ? clamp(-s.vx / W * 22, -24, 24) * give : 0;
+  spring(s, 'angle', 'spin', lean, 90, 7);
+  s.angle = clamp(s.angle, -30, 30);
+
+  // The cap trails every change of velocity, including impacts, in SVG units.
+  const toUnits = 1160 / h * 0.16 * give;
+  s.capVX -= (s.vx - vx0) * toUnits;
+  s.capVY -= (s.vy - vy0) * toUnits;
+  spring(s, 'capX', 'capVX', 0, 260, 11);
+  spring(s, 'capY', 'capVY', 0, 320, 13);
+  s.capX = clamp(s.capX, -90, 90);
+  s.capY = clamp(s.capY, -70, 70);
+}
+
+function spring(o, key, vel, target, k, c) {
+  o[vel] += (-(o[key] - target) * k - o[vel] * c) * STEP;
+  o[key] += o[vel] * STEP;
+}
+
+function render() {
+  const sx = (1 + s.ex) * (1 - 0.6 * s.ey);
+  const sy = (1 + s.ey) * (1 - 0.6 * s.ex);
+  // Keep the squashed side pressed against whatever it is touching.
+  const nearFloor = clamp(1 - (floor - h / 2 - s.y) / (h * 0.3), 0, 1);
+  const nearWall = clamp(1 - (Math.min(s.x - w / 2, W - w / 2 - s.x)) / (w * 0.3), 0, 1);
+  const offY = (h / 2) * (1 - sy) * nearFloor;
+  const offX = (w / 2) * (1 - sx) * nearWall * (s.x < W / 2 ? -1 : 1);
+  const a = Math.atan2(s.vy, s.vx);
+  const along = 1 + s.stretch;
+  mushroom.style.transform = `translate(${s.x - w / 2 + offX}px, ${s.y - h / 2 + offY}px) `
+    + `rotate(${s.angle}deg) rotate(${a}rad) scale(${along}, ${1 / along}) rotate(${-a}rad) `
+    + `scale(${sx}, ${sy})`;
+  cap.setAttribute('transform',
+    `translate(${s.capX.toFixed(1)} ${s.capY.toFixed(1)}) rotate(${(s.capX * 0.06).toFixed(2)} 32 -820)`);
+  const lift = clamp(1 - (floor - h / 2 - s.y) / (H * 0.7), 0, 1);
+  shadow.style.transform = `translate(${s.x - w / 2}px, ${floor - shadow.offsetHeight / 2}px) `
+    + `scale(${(0.35 + 0.45 * lift) * sx}, 1)`;
+  shadow.style.opacity = (0.15 + 0.5 * lift).toFixed(2);
+}
+
+let last = performance.now(), debt = 0;
+function frame(now) {
+  debt = Math.min(debt + (now - last) / 1000, 0.1);
+  last = now;
+  while (debt >= STEP) {
+    step();
+    debt -= STEP;
+  }
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// The same grab, move and release drive both the pointer and the idle demo.
+function grab(x, y) {
+  held = { x, y, ox: x - s.x, oy: y - s.y, trail: [{ x, y, t: performance.now() }] };
+  s.vey += 2.2 * give;
+  document.body.classList.add('held');
+}
+
+function move(x, y) {
+  held.x = x;
+  held.y = y;
+  const now = performance.now();
+  held.trail.push({ x, y, t: now });
+  while (held.trail.length > 2 && now - held.trail[0].t > 80) held.trail.shift();
+}
+
+function release() {
+  const first = held.trail[0], end = held.trail[held.trail.length - 1];
+  const dt = Math.max((end.t - first.t) / 1000, 1 / 60);
+  s.vx = clamp((end.x - first.x) / dt, -W * 4, W * 4);
+  s.vy = clamp((end.y - first.y) / dt, -H * 4, H * 4);
+  held = null;
+  document.body.classList.remove('held');
+}
+
+const IDLE_MS = 4000;
+let lastInput = -IDLE_MS;
+let pointer = null;
+const userActive = () => performance.now() - lastInput < IDLE_MS;
+
+addEventListener('pointerdown', (event) => {
+  lastInput = performance.now();
+  if (Math.hypot(event.clientX - s.x, event.clientY - s.y) > Math.max(w, h) * 0.6) return;
+  pointer = event.pointerId;
+  document.body.setPointerCapture(pointer);
+  grab(event.clientX, event.clientY);
+});
+addEventListener('pointermove', (event) => {
+  if (event.pointerId !== pointer) return;
+  lastInput = performance.now();
+  move(event.clientX, event.clientY);
+});
+const drop = (event) => {
+  if (event.pointerId !== pointer) return;
+  lastInput = performance.now();
+  pointer = null;
+  release();
+};
+addEventListener('pointerup', drop);
+addEventListener('pointercancel', drop);
+
+function hop(vx) {
+  s.vey -= 2.6 * give;
+  setTimeout(() => {
+    if (held) return;
+    s.vy = -H * (calm ? 1 : 1.9);
+    s.vx += vx;
+  }, 170);
+}
+
+mushroom.addEventListener('keydown', (event) => {
+  const push = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+  if (push === undefined && ![' ', 'Enter', 'ArrowUp'].includes(event.key)) return;
+  event.preventDefault();
+  lastInput = performance.now();
+  if (held) return;
+  hop(push ? push * W * 1.1 * give : 0);
+});
+
+addEventListener('resize', () => {
+  measure();
+  s.x = clamp(s.x, w / 2, W - w / 2);
+  s.y = clamp(s.y, h / 2, floor - h / 2);
+});
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const ease = (k) => (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2);
+
+// Moves a virtual hand along a path; gives up as soon as a real pointer arrives.
+async function glide(from, to, ms, curve) {
+  const start = performance.now();
+  for (;;) {
+    await new Promise(requestAnimationFrame);
+    if (pointer !== null) return false;
+    const k = Math.min((performance.now() - start) / ms, 1);
+    const e = curve(k);
+    move(from.x + (to.x - from.x) * e, from.y + (to.y - from.y) * e);
+    if (k === 1) return true;
+  }
+}
+
+// Pick it up, lift it with a wind-up away from the throw, then whip and let go.
+async function demoThrow() {
+  const dir = s.x < W / 2 ? 1 : -1;
+  const from = { x: s.x, y: s.y - h * 0.25 };
+  const lifted = { x: clamp(from.x - dir * W * 0.08, w * 0.7, W - w * 0.7), y: from.y - H * 0.16 };
+  const whip = { x: lifted.x + dir * W * (calm ? 0.06 : 0.16), y: lifted.y - H * (calm ? 0.03 : 0.1) };
+  grab(from.x, from.y);
+  const ok = await glide(from, lifted, 750, ease)
+    && await wait(260).then(() => pointer === null)
+    && await glide(lifted, whip, calm ? 260 : 150, (k) => k * k);
+  if (ok) release();
+}
+
+async function demo() {
+  await wait(900);
+  for (let round = 0; ; round++) {
+    if (!userActive() && !held && s.vy === 0) {
+      if (round % 3 === 2) hop((s.x < W / 2 ? 1 : -1) * W * (calm ? 0.4 : 0.9));
+      else await demoThrow();
+    }
+    await wait(2600 + Math.random() * 900);
+  }
+}
+demo();
+</script>
+</body>
+</html>

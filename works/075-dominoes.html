@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dominoes</title>
+<style>
+  :root { --ground: 64%; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { position: relative; background: linear-gradient(#8f9fa2, #b7b9a6 var(--ground)); }
+  .ground {
+    position: absolute; inset: var(--ground) 0 0 0;
+    background: linear-gradient(#5b4834, #3a2e23 70%);
+    box-shadow: 0 -1px 0 #6f5a41;
+  }
+  /* One em is one world unit; the script lays the row out to fit about two of them. */
+  .stage { position: absolute; left: 50%; top: var(--ground); font-size: min(52vw, 82vh); }
+
+  /* Each mushroom is a zero-size box at its foot; it tips about the front edge of its stem. */
+  .shroom, .tip { position: absolute; }
+  .tip { transform-origin: 0.151em 0; }
+  .body {
+    position: absolute; left: -0.5345em; bottom: 0; width: 1.069em; height: 1em;
+    overflow: visible; transform-origin: 50% 100%;
+  }
+  .head { transform-box: fill-box; transform-origin: 50% 100%; }
+  .shadow {
+    position: absolute; left: -0.4em; top: -0.04em; width: 0.8em; height: 0.08em; border-radius: 50%;
+    background: radial-gradient(closest-side, #1d160fb0, #1d160f00);
+  }
+  .drop, .spray {
+    position: absolute; left: -0.016em; top: -0.044em; width: 0.032em; height: 0.044em;
+    border-radius: 50% 50% 50% 50% / 64% 64% 40% 40%;
+    background: radial-gradient(circle at 38% 62%, #f2f6f3 12%, #7f9ea5 45%, #4d6c75);
+  }
+  .spray { width: 0.012em; height: 0.012em; left: -0.006em; top: -0.006em; border-radius: 50%; }
+</style>
+</head>
+<body>
+<div class="ground"></div>
+<div class="stage"></div>
+<svg width="0" height="0">
+  <defs>
+    <radialGradient id="cap-shade" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6e130b"/>
+      <stop offset="1" stop-color="#b8321a"/>
+    </radialGradient>
+  </defs>
+</svg>
+<template>
+  <div class="shroom">
+    <div class="shadow"></div>
+    <div class="tip">
+      <svg class="body" viewBox="-620 -1160 1240 1160">
+        <path fill="#e8e2d2" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+        <path fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+        <g class="head">
+          <path fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+          <path fill="url(#cap-shade)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+          <g fill="#efe7d6">
+            <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+            <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+            <ellipse cx="-188" cy="-1030" rx="28" ry="22"/>
+            <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+            <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+            <ellipse cx="92" cy="-990" rx="34" ry="27"/>
+            <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+            <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+            <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+            <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+            <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+            <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+            <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+            <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+  </div>
+</template>
+<script type="module">
+const stage = document.querySelector('.stage');
+const template = document.querySelector('template');
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const slow = calm ? 1.8 : 1;
+const wobble = calm ? 0.3 : 1;
+
+const easeOut = 'cubic-bezier(0.25, 0.8, 0.4, 1)';
+const easeIn = 'cubic-bezier(0.6, 0, 0.75, 0.2)';
+const easeInOut = 'cubic-bezier(0.65, 0, 0.35, 1)';
+
+// Profile geometry, in the 1160-unit-tall SVG space: the pivot at the front of the foot,
+// the outline of the cap's dome, and the stem.
+const PIVOT = 175;
+const UNIT = 1160;
+const DOME = Array.from({ length: 25 }, (_, i) => {
+  const a = Math.PI * i / 24;
+  return [32 + 560 * Math.cos(a), -820 - 310 * Math.sin(a)];
+});
+
+// Seven dominoes, each a little bigger than the last, then a big one that will not fall.
+// The last domino stands under the big one's brim, close enough to fall against its stem.
+const sizes = [...Array.from({ length: 7 }, (_, i) => 0.13 * 1.1 ** i), 0.44];
+let x = 0;
+const row = sizes.map((size, i) => {
+  if (i) x += 0.65 * sizes[i - 1] + (i === sizes.length - 1 ? 0.2 : 0.5) * size;
+  const el = template.content.firstElementChild.cloneNode(true);
+  stage.append(el);
+  return {
+    size, x, el,
+    tip: el.querySelector('.tip'), body: el.querySelector('.body'), head: el.querySelector('.head'),
+  };
+});
+const stopper = row.at(-1);
+const centre = (row[0].x - 0.5 * row[0].size + stopper.x + 0.5 * stopper.size) / 2;
+for (const m of row) {
+  m.el.style.left = `${(m.x - centre) / m.size}em`;
+  m.el.style.fontSize = `${m.size}em`;
+}
+
+// Where a point of mushroom m's profile lands, in world units, when m is tipped by angle degrees.
+function place(m, angle, [px, py]) {
+  const a = angle * Math.PI / 180, k = m.size / UNIT, dx = px - PIVOT;
+  return [m.x + k * (PIVOT + dx * Math.cos(a) - py * Math.sin(a)), k * (dx * Math.sin(a) + py * Math.cos(a))];
+}
+
+function inside(m, angle, [wx, wy]) {
+  const a = -angle * Math.PI / 180, k = m.size / UNIT;
+  const dx = (wx - m.x) / k - PIVOT, dy = wy / k;
+  const x = PIVOT + dx * Math.cos(a) - dy * Math.sin(a), y = dx * Math.sin(a) + dy * Math.cos(a);
+  const inCap = y < -780 && ((x - 32) / 560) ** 2 + ((y + 820) / 310) ** 2 < 1;
+  const inStem = y > -860 && x > -110 && x < 125;
+  return inCap || inStem;
+}
+
+// How far m tips before its cap comes to rest against the next one, or on the ground.
+function restAngle(m, next, nextAngle) {
+  const blocked = (point) => point[1] > 0 || inside(next, nextAngle, point);
+  let angle = 0;
+  while (!DOME.some((p) => blocked(place(m, angle, p)))) angle += 0.25;
+  return angle;
+}
+
+// Each one first meets its neighbour standing, then sinks a little further as the neighbour goes down.
+stopper.rest = 0;
+for (let i = row.length - 2; i >= 0; i--) {
+  row[i].contact = restAngle(row[i], row[i + 1], 0);
+  row[i].rest = restAngle(row[i], row[i + 1], row[i + 1].rest);
+}
+
+function play(element, keyframes, duration, delay = 0) {
+  return element.animate(keyframes, { duration: duration * slow, delay: delay * slow, fill: 'forwards' }).finished;
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms * slow));
+const deg = (value) => `${value}deg`;
+
+// The cap carries on after the stem stops: a forward nod, a little spring back.
+function nod(m, amount, delay = 0) {
+  play(m.head, [
+    { rotate: '0deg', scale: '1 1', easing: easeOut },
+    { offset: 0.25, rotate: deg(amount * wobble), scale: '1.06 0.92', easing: easeInOut },
+    { offset: 0.6, rotate: deg(-0.4 * amount * wobble), scale: '0.98 1.03', easing: easeInOut },
+    { rotate: '0deg', scale: '1 1' },
+  ], 520, delay);
+}
+
+function splash(m, point) {
+  for (const side of [-1, -0.4, 0.5, 1]) {
+    const spray = document.createElement('div');
+    spray.className = 'spray';
+    stage.append(spray);
+    const [sx, sy] = [point[0] - centre, point[1]];
+    spray.animate([
+      { translate: `${sx}em ${sy}em`, opacity: 1, easing: easeOut },
+      { translate: `${sx + side * 0.05}em ${sy - 0.04 - 0.02 * Math.abs(side)}em`, opacity: 1, easing: easeIn },
+      { translate: `${sx + side * 0.09}em ${sy + 0.02}em`, opacity: 0 },
+    ], { duration: 520 * slow }).finished.then(() => spray.remove());
+  }
+}
+
+// A raindrop lands on the smallest cap; it squashes, totters, and goes over.
+async function rainOn(m) {
+  const top = place(m, 0, [32, -1110]);
+  const drop = document.createElement('div');
+  drop.className = 'drop';
+  stage.append(drop);
+  await play(drop, [
+    { translate: `${top[0] - centre}em -1.4em`, scale: '0.8 1.3' },
+    { translate: `${top[0] - centre}em ${top[1]}em`, scale: '0.8 1.3' },
+  ], 900 * (calm ? 1.4 : 1));
+  drop.remove();
+  if (!calm) splash(m, top);
+  play(m.body, [
+    { scale: '1 1', easing: easeOut },
+    { offset: 0.2, scale: '1.12 0.86', easing: easeInOut },
+    { offset: 0.55, scale: '0.96 1.05', easing: easeInOut },
+    { scale: '1 1' },
+  ], 600);
+  play(m.head, [
+    { scale: '1 1', easing: easeOut },
+    { offset: 0.15, scale: '1.16 0.8', easing: easeInOut },
+    { offset: 0.5, scale: '0.95 1.06', easing: easeInOut },
+    { scale: '1 1' },
+  ], 600);
+  await wait(450);
+  await play(m.tip, [
+    { rotate: '0deg', easing: easeInOut },
+    { offset: 0.3, rotate: deg(-3 * wobble), easing: easeInOut },
+    { offset: 0.65, rotate: deg(5 * wobble), easing: easeInOut },
+    { rotate: deg(-1.5 * wobble) },
+  ], 1100);
+}
+
+// Bigger mushrooms fall more slowly, as a taller pendulum would.
+const fallTime = (m) => 520 * Math.sqrt(m.size / row[0].size);
+
+async function topple(i) {
+  const m = row[i], next = row[i + 1];
+  await play(m.tip, [
+    { rotate: deg(i ? 0 : -1.5 * wobble), easing: i ? 'cubic-bezier(0.4, 0.1, 0.8, 0.5)' : easeIn },
+    { rotate: deg(m.contact) },
+  ], fallTime(m));
+  nod(m, 9);
+  nod(next, -4);
+  if (next === stopper) {
+    play(m.tip, [
+      { rotate: deg(m.contact), easing: easeOut },
+      { offset: 0.35, rotate: deg(m.contact - 2.5 * wobble), easing: easeInOut },
+      { rotate: deg(m.rest) },
+    ], 600);
+    return shrug(stopper);
+  }
+  // A small rebound off the neighbour, then the slow lean as the neighbour gives way.
+  play(m.tip, [
+    { rotate: deg(m.contact), easing: easeOut },
+    { offset: 0.15, rotate: deg(m.contact - 2 * wobble), easing: easeIn },
+    { rotate: deg(m.rest) },
+  ], fallTime(next) + 400);
+  return topple(i + 1);
+}
+
+// The big one takes the whole row on its shoulder: a rock, a jiggle, and it holds.
+function shrug(m) {
+  play(m.body, [
+    { scale: '1 1', easing: easeOut },
+    { offset: 0.2, scale: '1.05 0.93', easing: easeInOut },
+    { offset: 0.5, scale: '0.98 1.03', easing: easeInOut },
+    { scale: '1 1' },
+  ], 700);
+  return play(m.tip, [
+    { rotate: '0deg', easing: easeOut },
+    { offset: 0.25, rotate: deg(4 * wobble), easing: easeInOut },
+    { offset: 0.6, rotate: deg(-1.2 * wobble), easing: easeInOut },
+    { rotate: '0deg' },
+  ], 900);
+}
+
+// The big one gathers itself and shoves back; the row springs upright from the far end,
+// each one tipping a little past vertical before it settles.
+async function rightAll() {
+  play(stopper.body, [
+    { scale: '1 1', easing: easeInOut },
+    { offset: 0.45, scale: '1.08 0.88', easing: easeOut },
+    { offset: 0.7, scale: '0.94 1.08', easing: easeInOut },
+    { scale: '1 1' },
+  ], 900);
+  await play(stopper.tip, [
+    { rotate: '0deg', easing: easeInOut },
+    { offset: 0.45, rotate: deg(2 * wobble), easing: easeOut },
+    { offset: 0.7, rotate: deg(-6 * wobble), easing: easeInOut },
+    { rotate: '0deg' },
+  ], 900);
+  const rising = row.slice(0, -1).reverse().map((m, order) => {
+    const lag = order * 130;
+    nod(m, -7, lag + 300);
+    play(m.body, [
+      { scale: '1 1', easing: easeOut },
+      { offset: 0.3, scale: '0.94 1.08', easing: easeInOut },
+      { offset: 0.6, scale: '1.06 0.94', easing: easeInOut },
+      { scale: '1 1' },
+    ], 700, lag);
+    return play(m.tip, [
+      { rotate: deg(m.rest), easing: easeOut },
+      { offset: 0.45, rotate: deg(-6 * wobble), easing: easeInOut },
+      { offset: 0.75, rotate: deg(2 * wobble), easing: easeInOut },
+      { rotate: '0deg' },
+    ], 900, lag);
+  });
+  await Promise.all(rising);
+}
+
+async function perform() {
+  for (;;) {
+    await wait(900);
+    await rainOn(row[0]);
+    await topple(0);
+    await wait(1500);
+    await rightAll();
+    await wait(1400);
+  }
+}
+perform();
+</script>
+</body>
+</html>

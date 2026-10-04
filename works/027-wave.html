@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: linear-gradient(#b9bfa6, #e0dfcb 20%, #a7a98a 20%, #59613f 36%, #2b3422 75%, #1e251a);
+    touch-action: none;
+  }
+  .cell { position: absolute; width: 0; height: 0; }
+  .trees { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .mushroom {
+    position: absolute; left: -0.5345em; bottom: 0; width: 1.069em; height: 1em;
+    overflow: visible; transform-origin: 50% 100%;
+  }
+  .head { transform-box: fill-box; transform-origin: 50% 100%; }
+  .shadow {
+    position: absolute; left: -0.36em; top: -0.04em; width: 0.72em; height: 0.08em;
+    border-radius: 50%; background: radial-gradient(closest-side, #12180dcc, #12180d00);
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0">
+  <defs>
+    <radialGradient id="cap-shade" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6e130b"/>
+      <stop offset="1" stop-color="#b8321a"/>
+    </radialGradient>
+    <g id="stem">
+      <path fill="#e8e2d2" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+      <path fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+    </g>
+    <g id="head">
+      <path fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+      <path fill="url(#cap-shade)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+      <g fill="#efe7d6">
+        <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+        <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+        <ellipse cx="-188" cy="-1030" rx="28" ry="22"/>
+        <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+        <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+        <ellipse cx="92" cy="-990" rx="34" ry="27"/>
+        <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+        <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+        <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+        <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+        <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+        <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+        <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+        <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+      </g>
+    </g>
+  </defs>
+</svg>
+<svg class="trees"><path fill="#a3a88d"/><path fill="#7f876a"/></svg>
+<template>
+  <div class="cell">
+    <div class="shadow"></div>
+    <svg class="mushroom" viewBox="-620 -1160 1240 1160"><use href="#stem"/><use class="head" href="#head"/></svg>
+  </div>
+</template>
+<script type="module">
+const CAMERA_HEIGHT = 2.4;      // above the ground, in grid spacings
+const HORIZON = 0.2;            // as a fraction of the view height
+const FAR = 13;                  // depth of the last row
+const ROW = 0.9;                // depth between rows
+const SPEED = 7;                // spacings per second
+const SIZE = 0.55;              // mushroom height, in spacings
+
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const template = document.querySelector('template');
+const easeIn = 'cubic-bezier(0.55, 0, 0.75, 0.3)';
+const easeOut = 'cubic-bezier(0.25, 0.7, 0.45, 1)';
+const easeInOut = 'cubic-bezier(0.65, 0, 0.35, 1)';
+
+let cells = [];
+let view;
+
+// A pinhole camera over a ground plane: depth z maps to a row on screen and a scale.
+function project(x, z) {
+  return { left: view.cx + x * view.f / z, top: view.horizon + CAMERA_HEIGHT * view.f / z, scale: view.f / z };
+}
+
+function toGround(clientX, clientY) {
+  if (clientY <= view.horizon + 1) return null;
+  const z = CAMERA_HEIGHT * view.f / (clientY - view.horizon);
+  return { x: (clientX - view.cx) * z / view.f, z };
+}
+
+// Two layers of misty spruce close off the far edge of the field.
+function growTrees(base, height) {
+  document.querySelectorAll('.trees path').forEach((path, layer) => {
+    let d = `M0 ${base}`;
+    for (let x = 0, i = 0; x < innerWidth + height; i++) {
+      const tall = height * (0.5 + 0.35 * layer) * (0.6 + 0.4 * Math.abs(Math.sin(i * 2.7 + layer * 5)));
+      const wide = tall * 0.3;
+      // Three tiers of drooping branches, each wider than the one above.
+      const left = [], right = [];
+      for (let tier = 1; tier <= 3; tier++) {
+        const y = base - tall * (1 - tier * 0.3);
+        left.push(`L${x - wide * tier * 0.33} ${y} L${x - wide * tier * 0.18} ${y - tall * 0.06}`);
+        right.unshift(`L${x + wide * tier * 0.18} ${y - tall * 0.06} L${x + wide * tier * 0.33} ${y}`);
+      }
+      d += ` L${x - wide} ${base - tall * 0.05} ${left.reverse().join(' ')} L${x} ${base - tall} ${right.reverse().join(' ')} L${x + wide} ${base - tall * 0.05}`;
+      x += wide * (1.1 + 0.8 * Math.abs(Math.sin(i * 7.1)));
+    }
+    path.setAttribute('d', `${d} L${innerWidth} ${base} Z`);
+  });
+}
+
+// Rows run back to front so nearer mushrooms paint over farther ones.
+function plant() {
+  const width = innerWidth, height = innerHeight;
+  view = { f: Math.min(width, height), cx: width / 2, horizon: height * HORIZON };
+  const near = CAMERA_HEIGHT * view.f / (height - view.horizon) * 0.85;
+  growTrees(project(0, FAR).top + 2, project(0, FAR).top - view.horizon + height * 0.08);
+  document.body.querySelectorAll('.cell').forEach((cell) => cell.remove());
+  cells = [];
+  let row = 0;
+  for (let z = FAR; z > near; z -= ROW, row++) {
+    const reach = (width / 2) / (view.f / z) + 1;
+    for (let x = -Math.ceil(reach) + (row % 2) * 0.5; x < reach; x++) {
+      const jitterX = x + 0.3 * Math.sin(row * 12.9 + x * 7.1);
+      const jitterZ = z + 0.2 * Math.sin(row * 3.7 + x * 17.3);
+      const { left, top, scale } = project(jitterX, jitterZ);
+      const node = template.content.firstElementChild.cloneNode(true);
+      node.style.left = `${left}px`;
+      node.style.top = `${top}px`;
+      node.style.fontSize = `${scale * SIZE * (0.85 + 0.3 * Math.abs(Math.sin(x * 4.3 + row)))}px`;
+      node.style.opacity = Math.min(1, 1.6 - jitterZ / FAR * 1.2);
+      document.body.append(node);
+      cells.push({
+        x: jitterX, z: jitterZ,
+        shadow: node.querySelector('.shadow'),
+        body: node.querySelector('.mushroom'),
+        head: node.querySelector('.head'),
+      });
+    }
+  }
+}
+
+// Each animation is added on top of whatever the mushroom is already doing,
+// so ripples that cross simply sum.
+function bounce(cell, amp, tilt, delay) {
+  const options = { duration: 950, delay, composite: 'add' };
+  const s = (x, y) => `${1 + x * amp} ${1 + y * amp}`;
+  cell.body.animate([
+    { translate: '0 0', scale: '1 1', rotate: '0deg', easing: easeInOut },
+    { offset: 0.17, translate: '0 0', scale: s(0.18, -0.24), rotate: `${-0.4 * tilt}deg`, easing: easeIn },
+    { offset: 0.27, translate: `0 ${-0.06 * amp}em`, scale: s(-0.14, 0.2), rotate: '0deg', easing: easeOut },
+    { offset: 0.5, translate: `0 ${-0.6 * amp}em`, scale: '1 1', rotate: `${tilt}deg`, easing: easeIn },
+    { offset: 0.72, translate: '0 0', scale: s(-0.08, 0.1), rotate: `${-0.3 * tilt}deg` },
+    { offset: 0.79, translate: '0 0', scale: s(0.22, -0.24), rotate: `${0.15 * tilt}deg`, easing: easeOut },
+    { offset: 0.9, translate: '0 0', scale: s(-0.04, 0.05), rotate: '0deg', easing: easeInOut },
+    { offset: 1, translate: '0 0', scale: '1 1', rotate: '0deg' },
+  ], options);
+  // The cap lags the stem by a beat: squashed on take-off, flung up at the top, squashed again on landing.
+  cell.head.animate([
+    { scale: '1 1', rotate: '0deg', easing: easeInOut },
+    { offset: 0.3, scale: s(0.12, -0.16), rotate: `${-0.6 * tilt}deg`, easing: easeOut },
+    { offset: 0.48, scale: s(-0.06, 0.1), rotate: `${0.5 * tilt}deg`, easing: easeInOut },
+    { offset: 0.74, scale: s(-0.05, 0.08), rotate: `${0.3 * tilt}deg` },
+    { offset: 0.84, scale: s(0.16, -0.2), rotate: `${-0.3 * tilt}deg`, easing: easeOut },
+    { offset: 0.95, scale: s(-0.03, 0.03), rotate: '0deg', easing: easeInOut },
+    { offset: 1, scale: '1 1', rotate: '0deg' },
+  ], options);
+  cell.shadow.animate([
+    { scale: '1', easing: easeOut },
+    { offset: 0.17, scale: `${1 + 0.15 * amp}`, easing: easeOut },
+    { offset: 0.5, scale: `${1 - 0.5 * amp}`, easing: easeIn },
+    { offset: 0.79, scale: `${1 + 0.15 * amp}`, easing: easeOut },
+    { offset: 1, scale: '1' },
+  ], options);
+}
+
+// A ring spreads out from (x, z) on the ground; each mushroom hops as it passes,
+// leaning away from the source, less the farther it is.
+function ripple(x, z, strength, reach) {
+  for (const cell of cells) {
+    const dx = cell.x - x, dz = cell.z - z;
+    const distance = Math.hypot(dx, dz);
+    const amp = strength * Math.exp(-distance / reach) * (calm ? 0.3 : 1);
+    if (amp < 0.05) continue;
+    bounce(cell, Math.min(amp, 1), 16 * amp * dx / Math.max(distance, 0.6), distance / SPEED * 1000);
+  }
+}
+
+plant();
+addEventListener('resize', plant);
+
+let lastInput = -Infinity;
+let lastStir = 0;
+addEventListener('pointerdown', (event) => {
+  lastInput = performance.now();
+  const at = toGround(event.clientX, event.clientY);
+  if (at) ripple(at.x, at.z, 1, 6);
+});
+// Moving the pointer brushes through the nearest few, like a hand through grass.
+addEventListener('pointermove', (event) => {
+  const now = performance.now();
+  lastInput = now;
+  if (now - lastStir < 90 || calm) return;
+  lastStir = now;
+  const at = toGround(event.clientX, event.clientY);
+  if (at) ripple(at.x, at.z, 0.7, 0.6);
+});
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+for (let i = 0; ; i++) {
+  if (performance.now() - lastInput > 4000) {
+    // Sources wander around the near and middle ground, alternating sides.
+    const side = i % 2 ? 1 : -1;
+    ripple(side * (0.5 + 2.5 * Math.random()), 3.5 + 5 * Math.random(), 1, 7);
+  }
+  await wait(calm ? 5000 : 1900 + 700 * Math.random());
+}
+</script>
+</body>
+</html>

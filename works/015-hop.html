@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hop</title>
+<style>
+  :root { --size: min(46vh, 40vw); --ground: calc(50% + 0.5 * var(--size)); }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { position: relative; background: linear-gradient(#dfe2d2, #c4caae var(--ground)); }
+  .ground {
+    position: absolute; inset: var(--ground) 0 0 0;
+    background: linear-gradient(#8a8a58, #6c6d45 60%);
+    box-shadow: 0 -1px 0 #9c9a66;
+  }
+
+  /* Every layer of the rig is a zero-size box at the stem's foot, so rotations
+     and scales pivot on the point where the mushroom touches the ground. */
+  .hopper, .floor { position: absolute; left: 50%; top: var(--ground); font-size: var(--size); }
+  .facing, .lift { position: absolute; transform-origin: 0 0; }
+  .body {
+    position: absolute; left: -0.5345em; bottom: 0; width: 1.069em; height: 1em;
+    overflow: visible; transform-origin: 50% 100%;
+  }
+  .head { transform-box: fill-box; transform-origin: 50% 100%; }
+  .shadow, .dust {
+    position: absolute; border-radius: 50%;
+    background: radial-gradient(closest-side, #2f3018, #2f301800);
+  }
+  .shadow { left: -0.45em; top: -0.045em; width: 0.9em; height: 0.09em; opacity: 0.6; }
+  .dust { width: 0.08em; height: 0.05em; background: #b3ae7c; }
+  .tuft { position: absolute; bottom: -0.01em; width: 0.1em; height: 0.06em; fill: #5c5e37; }
+</style>
+</head>
+<body>
+<div class="ground"></div>
+<div class="floor"></div>
+<svg width="0" height="0">
+  <symbol id="tuft" viewBox="0 0 64 40">
+    <path d="M8 40 Q12 22 2 6 Q18 22 20 40 Z M22 40 Q28 18 30 0 Q36 20 36 40 Z M36 40 Q44 22 62 12 Q48 26 48 40 Z"/>
+  </symbol>
+</svg>
+<div class="hopper">
+  <div class="shadow"></div>
+  <div class="facing">
+    <div class="lift">
+      <svg class="body" viewBox="-620 -1160 1240 1160" xmlns="http://www.w3.org/2000/svg">
+        <path class="stem" fill="#e8e2d2" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+        <path class="ring" fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+        <g class="head">
+          <path class="gills" fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+          <path class="cap" fill="url(#cap)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+          <g class="spots" fill="#efe7d6">
+            <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+            <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+            <ellipse cx="-188" cy="-1030" rx="28" ry="22"/>
+            <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+            <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+            <ellipse cx="92" cy="-990" rx="34" ry="27"/>
+            <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+            <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+            <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+            <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+            <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+            <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+            <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+            <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+          </g>
+        </g>
+        <defs>
+          <radialGradient id="cap" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#6e130b"/>
+            <stop offset="1" stop-color="#b8321a"/>
+          </radialGradient>
+        </defs>
+      </svg>
+    </div>
+  </div>
+</div>
+<script type="module">
+const hopper = document.querySelector('.hopper');
+const facing = document.querySelector('.facing');
+const lift = document.querySelector('.lift');
+const body = document.querySelector('.body');
+const head = document.querySelector('.head');
+const shadow = document.querySelector('.shadow');
+const floor = document.querySelector('.floor');
+
+const easeOut = 'cubic-bezier(0.25, 0.8, 0.4, 1)';
+const easeIn = 'cubic-bezier(0.6, 0, 0.75, 0.2)';
+const easeInOut = 'cubic-bezier(0.65, 0, 0.35, 1)';
+const RANGE = 0.7;                    // how far either side of centre it travels, in heights
+
+let x = -RANGE;
+let face = 1;
+
+function play(element, keyframes, duration) {
+  return element.animate(keyframes, { duration, fill: 'forwards' }).finished;
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// One hop, in four beats: crouch (0–22%), launch (22–30%), flight (30–82%), landing (82–100%).
+// Distances and heights are in mushroom heights, so the whole rig scales with the view.
+function hop(distance, height, duration) {
+  const from = x;
+  x += distance * face;
+  return Promise.all([
+    play(hopper, [
+      { offset: 0, translate: `${from}em 0` },
+      { offset: 0.22, translate: `${from - 0.025 * face}em 0`, easing: 'cubic-bezier(0.3, 0.2, 0.6, 1)' },
+      { offset: 0.82, translate: `${x}em 0` },
+      { offset: 1, translate: `${x}em 0` },
+    ], duration),
+    // Up decelerates and down accelerates, so the path is a parabola; the tilt follows its tangent.
+    play(lift, [
+      { offset: 0, translate: '0 0', rotate: '0deg', easing: easeInOut },
+      { offset: 0.22, translate: '0 0', rotate: '-5deg' },
+      { offset: 0.3, translate: '0 -0.02em', rotate: '9deg', easing: easeOut },
+      { offset: 0.56, translate: `0 ${-height}em`, rotate: '0deg', easing: easeIn },
+      { offset: 0.82, translate: '0 0', rotate: '-8deg', easing: easeOut },
+      { offset: 0.91, translate: '0 0', rotate: '2.5deg', easing: easeInOut },
+      { offset: 1, translate: '0 0', rotate: '0deg' },
+    ], duration),
+    play(body, [
+      { offset: 0, scale: '1 1', easing: easeInOut },
+      { offset: 0.22, scale: '1.16 0.8', easing: easeIn },
+      { offset: 0.3, scale: '0.84 1.2', easing: easeOut },
+      { offset: 0.56, scale: '1.02 0.98', easing: easeIn },
+      { offset: 0.8, scale: '0.9 1.12' },
+      { offset: 0.85, scale: '1.26 0.74', easing: easeOut },
+      { offset: 0.93, scale: '0.96 1.05', easing: easeInOut },
+      { offset: 1, scale: '1 1' },
+    ], duration),
+    // The cap is heavier than the stem: it lags each change of direction and overshoots it.
+    play(head, [
+      { offset: 0, scale: '1 1', rotate: '0deg', easing: easeInOut },
+      { offset: 0.24, scale: '1.05 0.92', rotate: '-3deg' },
+      { offset: 0.33, scale: '1.1 0.84', rotate: '-7deg', easing: easeOut },
+      { offset: 0.47, scale: '0.95 1.07', rotate: '4deg', easing: easeInOut },
+      { offset: 0.62, scale: '1 1', rotate: '0deg', easing: easeIn },
+      { offset: 0.82, scale: '0.95 1.07', rotate: '5deg' },
+      { offset: 0.88, scale: '1.14 0.8', rotate: '-4deg', easing: easeOut },
+      { offset: 0.96, scale: '0.97 1.03', rotate: '1deg', easing: easeInOut },
+      { offset: 1, scale: '1 1', rotate: '0deg' },
+    ], duration),
+    play(shadow, [
+      { offset: 0, scale: '1', opacity: 0.6 },
+      { offset: 0.22, scale: '1.1', opacity: 0.65, easing: easeOut },
+      { offset: 0.56, scale: `${1 - height * 0.9}`, opacity: 0.25, easing: easeIn },
+      { offset: 0.82, scale: '1', opacity: 0.6 },
+      { offset: 0.85, scale: '1.15', opacity: 0.65 },
+      { offset: 1, scale: '1', opacity: 0.6 },
+    ], duration),
+    wait(duration * 0.83).then(() => kickUpDust(height)),
+  ]);
+}
+
+// Little puffs that skid away from the foot on landing; bigger drops throw more.
+function kickUpDust(height) {
+  const count = Math.round(height * 10);
+  for (let i = 0; i < count; i++) {
+    const side = i % 2 ? 1 : -1;
+    const reach = 0.16 + 0.22 * Math.random() * height * 2;
+    const puff = document.createElement('div');
+    puff.className = 'dust';
+    floor.append(puff);
+    puff.style.left = `${x - 0.04 + side * 0.12}em`;
+    puff.style.top = '-0.03em';
+    puff.animate([
+      { translate: '0 0', scale: '0.4', opacity: 0.9 },
+      { translate: `${side * reach}em ${-0.05 - Math.random() * 0.06}em`, scale: '1.4', opacity: 0 },
+    ], { duration: 500 + Math.random() * 300, easing: 'cubic-bezier(0.1, 0.7, 0.3, 1)' }).finished.then(() => puff.remove());
+  }
+}
+
+// At the edge it leans out to peer over, then shrinks back from the drop.
+function peer() {
+  return Promise.all([
+    play(lift, [
+      { rotate: '0deg', easing: easeInOut },
+      { offset: 0.25, rotate: '12deg' },
+      { offset: 0.6, rotate: '12deg', easing: easeInOut },
+      { offset: 0.72, rotate: '-6deg', easing: easeInOut },
+      { offset: 1, rotate: '0deg' },
+    ], 1700),
+    play(head, [
+      { rotate: '0deg', translate: '0 0', easing: easeInOut },
+      { offset: 0.3, rotate: '9deg', translate: '12px 6px' },
+      { offset: 0.42, rotate: '6deg', translate: '12px 6px', easing: easeInOut },
+      { offset: 0.56, rotate: '11deg', translate: '14px 8px', easing: easeInOut },
+      { offset: 0.76, rotate: '-7deg', translate: '-8px 0', easing: easeInOut },
+      { offset: 1, rotate: '0deg', translate: '0 0' },
+    ], 1700),
+  ]);
+}
+
+// A small hop in place with the flip at the top, where it is hardest to see.
+function turnAround() {
+  face = -face;
+  return Promise.all([
+    hop(0, 0.16, 900),
+    play(facing, [
+      { offset: 0, scale: `${-face} 1` },
+      { offset: 0.34, scale: `${-face} 1`, easing: easeInOut },
+      { offset: 0.6, scale: `${face} 1` },
+      { offset: 1, scale: `${face} 1` },
+    ], 900),
+  ]);
+}
+
+// Tufts of grass along the horizon give the hops something to pass.
+for (let i = 0; i < 9; i++) {
+  const tuft = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  tuft.innerHTML = '<use href="#tuft"/>';
+  tuft.classList.add('tuft');
+  tuft.style.left = `${-1.75 + i * 0.42 + 0.12 * Math.sin(i * 7.3)}em`;
+  tuft.style.scale = `${0.7 + 0.5 * Math.abs(Math.sin(i * 3.1))}`;
+  floor.append(tuft);
+}
+
+async function perform() {
+  hopper.style.translate = `${x}em 0`;
+  for (;;) {
+    await hop(0.42, 0.26, 1000);
+    await wait(180);
+    await hop(0.4, 0.3, 1050);
+    await wait(420);
+    await hop(0.58, 0.48, 1300);
+    await wait(500);
+    await peer();
+    await wait(250);
+    await turnAround();
+    await wait(600);
+  }
+}
+
+// Without motion it stays put and breathes.
+function breathe() {
+  body.animate([{ scale: '1 1' }, { scale: '1.02 0.985' }], {
+    duration: 2400, direction: 'alternate', iterations: Infinity, easing: easeInOut,
+  });
+}
+
+if (matchMedia('(prefers-reduced-motion: reduce)').matches) breathe();
+else perform();
+</script>
+</body>
+</html>

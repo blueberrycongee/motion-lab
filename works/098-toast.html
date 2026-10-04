@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toast</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    --w: min(74vmin, 90vw);
+    --h: calc(var(--w) * 0.25);
+    --gap: calc(var(--w) * 0.05);
+    display: grid;
+    place-items: center;
+    background: radial-gradient(ellipse at 50% 40%, #ecd9ce, #dfc4b5 70%, #d6b7a6);
+    touch-action: none;
+  }
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+    width: var(--w);
+    height: calc(var(--h) * 3 + var(--gap) * 2);
+  }
+  .toast {
+    position: relative;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: calc(var(--w) * 0.04);
+    height: var(--h);
+    padding-left: calc(var(--w) * 0.25);
+    box-sizing: border-box;
+    border-radius: calc(var(--w) * 0.045);
+    background: #fbf6ef;
+    box-shadow: 0 calc(var(--w) * 0.012) calc(var(--w) * 0.04) #6b3f2a2e, 0 0 0 calc(var(--w) * 0.002) #6b3f2a1a;
+    cursor: grab;
+    outline: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .toast:focus-visible { box-shadow: 0 0 0 calc(var(--w) * 0.008) #8a4a2c88, 0 calc(var(--w) * 0.012) calc(var(--w) * 0.04) #6b3f2a2e; }
+  .toast.dragging { cursor: grabbing; }
+  .toast::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--w) * 0.03);
+    top: calc(var(--w) * 0.03);
+    bottom: calc(var(--w) * 0.03);
+    width: calc(var(--w) * 0.19);
+    border-radius: calc(var(--w) * 0.03);
+    background: linear-gradient(#f0e2d5, #e6d2c1);
+  }
+  .toast svg {
+    position: absolute;
+    left: calc(var(--w) * 0.015);
+    bottom: calc(var(--w) * 0.042);
+    width: calc(var(--w) * 0.22);
+    overflow: visible;
+    pointer-events: none;
+  }
+  .cap { transform-origin: 32px -820px; }
+  .spots ellipse { transform-box: fill-box; transform-origin: center; }
+  .lines { display: grid; gap: calc(var(--w) * 0.03); flex: 1; padding-right: calc(var(--w) * 0.06); }
+  .lines i { display: block; height: calc(var(--w) * 0.03); border-radius: calc(var(--w) * 0.015); }
+  .lines i:first-child { width: var(--a); background: #4a3329; }
+  .lines i:last-child { width: var(--b); background: #4a33293a; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position: absolute" aria-hidden="true">
+  <defs>
+    <radialGradient id="cap0" cx="-60" cy="-1110" r="660" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6e130b"/><stop offset="1" stop-color="#b8321a"/>
+    </radialGradient>
+    <radialGradient id="cap1" cx="-60" cy="-1110" r="660" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4f2d16"/><stop offset="1" stop-color="#9a6232"/>
+    </radialGradient>
+    <radialGradient id="cap2" cx="-60" cy="-1110" r="660" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8a5410"/><stop offset="1" stop-color="#d79a32"/>
+    </radialGradient>
+  </defs>
+</svg>
+<template>
+  <div class="toast" tabindex="0" role="status">
+    <svg viewBox="-620 -1160 1240 1160">
+      <g class="lean">
+        <g class="body">
+          <path fill="#e8e2d2" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+          <path fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+          <g class="cap">
+            <path fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+            <path class="dome" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+            <g class="spots" fill="#efe7d6">
+              <ellipse cx="12" cy="-1070" rx="34" ry="27"/>
+              <ellipse cx="202" cy="-1050" rx="30" ry="24"/>
+              <ellipse cx="-188" cy="-1030" rx="32" ry="25"/>
+              <ellipse cx="362" cy="-990" rx="34" ry="27"/>
+              <ellipse cx="-348" cy="-960" rx="28" ry="22"/>
+              <ellipse cx="92" cy="-990" rx="38" ry="30"/>
+              <ellipse cx="-88" cy="-940" rx="26" ry="21"/>
+              <ellipse cx="252" cy="-930" rx="29" ry="23"/>
+              <ellipse cx="472" cy="-900" rx="24" ry="19"/>
+              <ellipse cx="-438" cy="-880" rx="22" ry="17"/>
+              <ellipse cx="-248" cy="-890" rx="30" ry="24"/>
+              <ellipse cx="132" cy="-880" rx="24" ry="19"/>
+            </g>
+          </g>
+        </g>
+      </g>
+    </svg>
+    <div class="lines"><i></i><i></i></div>
+  </div>
+</template>
+<main class="stack" aria-live="polite"></main>
+<script type="module">
+const stack = document.querySelector('.stack');
+const template = document.querySelector('template');
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const MAX = 3;
+const VARIANTS = [
+  { spots: true, a: '46%', b: '78%' },
+  { spots: false, a: '58%', b: '64%' },
+  { spots: true, a: '38%', b: '84%' },
+];
+
+function spring(stiffness, damping) {
+  const dt = 1 / 120;
+  const samples = [];
+  let x = 0, v = 0;
+  while (samples.length < 600) {
+    v += ((1 - x) * stiffness - v * damping) * dt;
+    x += v * dt;
+    samples.push(x);
+    if (Math.abs(1 - x) < 0.001 && Math.abs(v) < 0.01) break;
+  }
+  const stops = samples.filter((_, i) => i % 3 === 2).map((s) => s.toFixed(3));
+  return { easing: `linear(0, ${stops.join(', ')}, 1)`, duration: samples.length * dt * 1000 };
+}
+
+const reflow = calm ? { duration: 220, easing: 'ease-out' } : spring(220, 24);
+const arrive = calm ? { duration: 260, easing: 'ease-out' } : spring(200, 19);
+const recoil = calm ? { duration: 200, easing: 'ease-out' } : spring(300, 22);
+const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+const width = () => stack.offsetWidth;
+const live = () => [...stack.children].filter((toast) => !toast.classList.contains('leaving'));
+
+// Remaining toasts glide from where they were to where the new layout puts them.
+function flip(mutate) {
+  const before = new Map([...stack.children].map((toast) => [toast, toast.getBoundingClientRect().top]));
+  mutate();
+  for (const [toast, top] of before) {
+    if (!toast.isConnected) continue;
+    toast.getAnimations().filter((animation) => animation.id === 'flip').forEach((animation) => animation.cancel());
+    const dy = top - toast.getBoundingClientRect().top;
+    if (Math.abs(dy) < 0.5) continue;
+    const animation = toast.animate([{ translate: `0 ${dy}px` }, { translate: '0 0' }], reflow);
+    animation.id = 'flip';
+  }
+}
+
+// The mushroom pushes up out of the card after the card lands, then its cap opens.
+function sprout(toast, delay) {
+  const body = toast.querySelector('.body');
+  const cap = toast.querySelector('.cap');
+  if (calm) {
+    body.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, delay, fill: 'backwards' });
+    return;
+  }
+  body.animate([
+    { transform: 'scale(0.4, 0)' },
+    { transform: 'scale(0.86, 1.14)', offset: 0.5 },
+    { transform: 'scale(1.08, 0.93)', offset: 0.75 },
+    { transform: 'none' },
+  ], { duration: 640, delay, easing: 'cubic-bezier(0.3, 0, 0.3, 1)', fill: 'backwards' });
+  cap.animate([
+    { transform: 'scale(0.55, 0.8)' },
+    { transform: 'scale(0.55, 0.8)', offset: 0.35 },
+    { transform: 'scale(1.1, 0.94)', offset: 0.72 },
+    { transform: 'none' },
+  ], { duration: 640, delay, easing: 'cubic-bezier(0.3, 0, 0.3, 1)', fill: 'backwards' });
+  toast.querySelectorAll('.spots ellipse').forEach((spot, i) => {
+    spot.animate([{ transform: 'scale(0)' }, { transform: 'scale(1.3)', offset: 0.6 }, { transform: 'none' }],
+      { duration: 320, delay: delay + 380 + i * 25, easing: 'ease-out', fill: 'backwards' });
+  });
+}
+
+let made = 0;
+function push() {
+  const variant = made % VARIANTS.length;
+  const { spots, a, b } = VARIANTS[variant];
+  made++;
+  const toast = template.content.firstElementChild.cloneNode(true);
+  toast.querySelector('.dome').setAttribute('fill', `url(#cap${variant})`);
+  if (!spots) toast.querySelector('.spots').remove();
+  toast.style.setProperty('--a', a);
+  toast.style.setProperty('--b', b);
+  toast.lean = { angle: 0, speed: 0, target: 0 };
+  bind(toast);
+  flip(() => stack.prepend(toast));
+  toast.animate([
+    { transform: 'translateY(-45%) scale(0.94)', opacity: 0 },
+    { transform: 'none', opacity: 1 },
+  ], arrive);
+  sprout(toast, calm ? 0 : 150);
+  live().slice(MAX).forEach(retire);
+}
+
+// The oldest toast past the limit sinks and fades instead of vanishing.
+function retire(toast) {
+  toast.classList.add('leaving');
+  toast.animate([{ opacity: 1 }, { transform: 'translateY(18%) scale(0.92)', opacity: 0 }],
+    { duration: 360, easing: 'cubic-bezier(0.4, 0, 0.7, 0.4)', fill: 'forwards' })
+    .finished.then(() => toast.remove());
+}
+
+function current(toast) {
+  const style = getComputedStyle(toast);
+  return { transform: style.transform === 'none' ? 'none' : style.transform, opacity: style.opacity };
+}
+
+function dismiss(toast, side, speed) {
+  toast.classList.add('leaving');
+  const from = current(toast);
+  toast.getAnimations().filter((animation) => animation.id !== 'flip').forEach((animation) => animation.cancel());
+  toast.style.transform = '';
+  toast.style.opacity = '';
+  const to = side * (innerWidth / 2 + width());
+  const duration = calm ? 260 : clamp(Math.abs(to) / Math.max(Math.abs(speed), width() * 2.4) * 1000, 180, 380);
+  toast.lean.speed += side * 260;
+  toast.animate([from, { transform: `translateX(${to}px) rotate(${side * 12}deg)`, opacity: 0 }],
+    { duration, easing: 'cubic-bezier(0.25, 0.6, 0.5, 1)', fill: 'forwards' })
+    .finished.then(() => flip(() => toast.remove()));
+}
+
+function hop(toast) {
+  if (calm) return;
+  toast.querySelector('.body').animate([
+    { transform: 'none' },
+    { transform: 'scale(1.12, 0.86)', offset: 0.2 },
+    { transform: 'translateY(-200px) scale(0.94, 1.08)', offset: 0.55 },
+    { transform: 'scale(1.06, 0.95)', offset: 0.82 },
+    { transform: 'none' },
+  ], { duration: 560, easing: 'ease-in-out' });
+}
+
+// One drag at a time; the idle demo drives the same functions as a pointer.
+let drag = null;
+
+function dragStart(toast, x) {
+  toast.getAnimations().filter((animation) => animation.id !== 'flip').forEach((animation) => animation.cancel());
+  drag = { toast, x0: x, dx: 0, v: 0, t: performance.now() };
+  toast.classList.add('dragging');
+}
+
+function dragMove(x) {
+  const now = performance.now();
+  const dx = x - drag.x0;
+  const dt = Math.max((now - drag.t) / 1000, 1 / 240);
+  drag.v = drag.v * 0.4 + ((dx - drag.dx) / dt) * 0.6;
+  drag.dx = dx;
+  drag.t = now;
+  const { toast } = drag;
+  toast.style.transform = `translateX(${dx}px) rotate(${(dx / width()) * 5}deg)`;
+  toast.style.opacity = 1 - clamp(Math.abs(dx) / width() - 0.15, 0, 1) * 0.7;
+  // The mushroom's cap trails the card.
+  toast.lean.target = clamp(-drag.v * 0.012, -22, 22);
+}
+
+function dragEnd() {
+  const { toast, dx, v } = drag;
+  drag = null;
+  toast.classList.remove('dragging');
+  toast.lean.target = 0;
+  const flung = Math.abs(v) > width() * 1.2 && Math.sign(v) === Math.sign(dx);
+  if (Math.abs(dx) > width() * 0.35 || flung) {
+    dismiss(toast, Math.sign(dx) || 1, v);
+    return;
+  }
+  const from = current(toast);
+  toast.style.transform = '';
+  toast.style.opacity = '';
+  toast.animate([from, { transform: 'none', opacity: 1 }], recoil);
+  toast.lean.speed -= Math.sign(dx) * Math.min(Math.abs(dx), 60) * 4;
+  if (Math.abs(dx) < 4) hop(toast);
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 1 / 30);
+  last = now;
+  for (const toast of stack.children) {
+    const lean = toast.lean;
+    lean.speed += ((lean.target - lean.angle) * 180 - lean.speed * 12) * dt;
+    lean.angle += lean.speed * dt;
+    const angle = calm ? 0 : clamp(lean.angle, -30, 30);
+    toast.querySelector('.lean').setAttribute('transform', `rotate(${angle.toFixed(2)})`);
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+const IDLE_MS = 4000;
+let lastInput = -IDLE_MS;
+let pointer = null;
+const touch = () => { lastInput = performance.now(); };
+
+function bind(toast) {
+  toast.addEventListener('pointerdown', (event) => {
+    touch();
+    if (toast.classList.contains('leaving') || drag) return;
+    pointer = event.pointerId;
+    toast.setPointerCapture(pointer);
+    dragStart(toast, event.clientX);
+    event.stopPropagation();
+  });
+  toast.addEventListener('pointermove', (event) => {
+    if (event.pointerId !== pointer || drag?.toast !== toast) return;
+    touch();
+    dragMove(event.clientX);
+  });
+  const release = (event) => {
+    if (event.pointerId !== pointer || drag?.toast !== toast) return;
+    touch();
+    pointer = null;
+    dragEnd();
+  };
+  toast.addEventListener('pointerup', release);
+  toast.addEventListener('pointercancel', release);
+  toast.addEventListener('keydown', (event) => {
+    const side = { ArrowLeft: -1, ArrowRight: 1, Delete: 1, Backspace: 1 }[event.key];
+    if (!side || toast.classList.contains('leaving')) return;
+    event.preventDefault();
+    touch();
+    const next = live()[live().indexOf(toast) + 1] ?? live()[live().indexOf(toast) - 1];
+    dismiss(toast, side, 0);
+    next?.focus();
+  });
+}
+
+// Tapping the empty page, or Enter while nothing is focused, raises a new toast.
+addEventListener('pointerdown', () => {
+  touch();
+  push();
+});
+addEventListener('keydown', (event) => {
+  if (event.target !== document.body || !['Enter', ' '].includes(event.key)) return;
+  event.preventDefault();
+  touch();
+  push();
+});
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const ease = (k) => (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2);
+
+async function glide(from, to, ms, curve) {
+  const start = performance.now();
+  for (;;) {
+    await new Promise(requestAnimationFrame);
+    if (pointer !== null || !drag) return false;
+    const k = Math.min((performance.now() - start) / ms, 1);
+    dragMove(from + (to - from) * curve(k));
+    if (k === 1) return true;
+  }
+}
+
+// A hesitant tug, a small give back, then a decisive flick off to one side.
+async function demoSwipe(toast, side) {
+  const x = toast.getBoundingClientRect().left;
+  dragStart(toast, x);
+  const w = width();
+  const ok = await glide(x, x + side * w * 0.14, 520, ease)
+    && await glide(x + side * w * 0.14, x + side * w * 0.08, 240, ease)
+    && await glide(x + side * w * 0.08, x + side * w * 0.5, 170, (k) => k * k);
+  if (ok) dragEnd();
+}
+
+async function demo() {
+  push();
+  await wait(500);
+  push();
+  for (let round = 0; ; round++) {
+    await wait(round % 4 === 0 ? 1300 : 1700);
+    if (performance.now() - lastInput < IDLE_MS || drag) continue;
+    const toasts = live();
+    if (round % 4 === 3 && toasts.length > 1) {
+      await demoSwipe(toasts[toasts.length > 2 && round % 8 < 4 ? 2 : 1], round % 8 < 4 ? 1 : -1);
+    } else {
+      push();
+    }
+  }
+}
+demo();
+</script>
+</body>
+</html>

@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloth</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #a9b4b4; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2', { antialias: true });
+
+// The mushroom in profile as Path2D, in mushroom units: y up, ground at 0,
+// cap about 1.12 wide, top near 1.11. Draw with ctx.setTransform(s, 0, 0, -s, x, groundY).
+function mushroomPaths() {
+  const lean = (y) => 0.05 * y * y;
+  const stemR = (y) => 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  const outline = (y0, y1, radius) => {
+    const path = new Path2D();
+    const n = 32;
+    for (let i = 0; i <= n; i++) {
+      const y = y0 + (y1 - y0) * (i / n);
+      path.lineTo(lean(y) + radius(y), y);
+    }
+    for (let i = n; i >= 0; i--) {
+      const y = y0 + (y1 - y0) * (i / n);
+      path.lineTo(lean(y) - radius(y), y);
+    }
+    path.closePath();
+    return path;
+  };
+  const stem = outline(0, 0.86, stemR);
+  const ring = outline(0.555, 0.655, (y) => 0.096 + (0.66 - y) * 0.32);
+
+  const cx = lean(0.8), a = Math.asin(0.02 / 0.31);
+  const cap = new Path2D();
+  cap.ellipse(cx, 0.8, 0.56, 0.31, 0, a, Math.PI - a);
+  cap.quadraticCurveTo(cx, 0.86, cx + 0.559, 0.82);
+  cap.closePath();
+
+  const gills = new Path2D();
+  gills.moveTo(cx - 0.55, 0.822);
+  gills.quadraticCurveTo(cx, 0.862, cx + 0.55, 0.822);
+  gills.lineTo(cx + 0.52, 0.8);
+  gills.quadraticCurveTo(cx, 0.83, cx - 0.52, 0.8);
+  gills.closePath();
+
+  // Warts on the visible face of the cap: [x, y, radius].
+  const spots = [
+    [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+    [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+    [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+    [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+  ].map(([x, y, r]) => {
+    const path = new Path2D();
+    path.ellipse(cx + x, y, r, r * 0.8, 0, 0, Math.PI * 2);
+    return path;
+  });
+  return { cap, gills, stem, ring, spots };
+}
+
+// The banner, in metres: a linen drop hanging from a rod, simulated as a grid of points.
+const COLS = 30, ROWS = 39;
+const WIDTH = 1, HEIGHT = 1.3, TOP = 0.62;
+const COUNT = COLS * ROWS;
+
+// Bottle-green linen, screen printed with the mushroom in four inks.
+function printBanner() {
+  const w = 800, h = Math.round(w * HEIGHT / WIDTH);
+  const image = new OffscreenCanvas(w, h);
+  const c = image.getContext('2d');
+  c.fillStyle = '#34503f';
+  c.fillRect(0, 0, w, h);
+  // Slubs in the weave: short threads a little lighter or darker than the cloth.
+  for (let i = 0; i < 9000; i++) {
+    const horizontal = Math.random() < 0.5, len = 4 + Math.random() * 26;
+    c.fillStyle = Math.random() < 0.5 ? 'rgba(255, 245, 220, 0.05)' : 'rgba(0, 10, 5, 0.08)';
+    c.fillRect(Math.random() * w, Math.random() * h, horizontal ? len : 1.2, horizontal ? 1.2 : len);
+  }
+  // The rod sleeve, the hem and a printed keyline border.
+  c.fillStyle = 'rgba(0, 0, 0, 0.16)';
+  c.fillRect(0, 0, w, h * 0.065);
+  c.strokeStyle = 'rgba(232, 222, 200, 0.55)';
+  c.setLineDash([7, 6]);
+  c.lineWidth = 2;
+  for (const y of [h * 0.065, h - 20]) {
+    c.beginPath();
+    c.moveTo(0, y);
+    c.lineTo(w, y);
+    c.stroke();
+  }
+  c.setLineDash([]);
+  c.strokeStyle = '#ddd2b8';
+  c.lineWidth = 5;
+  c.strokeRect(w * 0.07, h * 0.11, w * 0.86, h * 0.84);
+
+  const s = w * 0.68, x = w * 0.48, ground = h * 0.86;
+  // A mossy mound printed under the bulb.
+  c.fillStyle = '#6f7d3c';
+  c.beginPath();
+  c.ellipse(w * 0.5, ground + 4, w * 0.3, h * 0.03, 0, Math.PI, 0);
+  c.fill();
+  c.setTransform(s, 0, 0, -s, x, ground);
+  const m = mushroomPaths();
+  c.fillStyle = '#e8e2d2';
+  c.fill(m.stem);
+  c.fillStyle = '#d6cdb6';
+  c.fill(m.ring);
+  c.fillStyle = '#d2c6ad';
+  c.fill(m.gills);
+  const red = c.createRadialGradient(0.02, 1.0, 0.05, 0.02, 0.85, 0.6);
+  red.addColorStop(0, '#6e130b');
+  red.addColorStop(1, '#b8321a');
+  c.fillStyle = red;
+  c.fill(m.cap);
+  c.fillStyle = '#efe7d6';
+  for (const spot of m.spots) c.fill(spot);
+  return image;
+}
+
+const vertexShader = `#version 300 es
+in vec3 position;
+in vec3 normal;
+in vec2 uv;
+in float cavity;
+uniform mat4 uViewProj;
+out vec3 vPosition;
+out vec3 vNormal;
+out vec2 vUv;
+out float vCavity;
+void main() {
+  vPosition = position;
+  vNormal = normal;
+  vUv = uv;
+  vCavity = cavity;
+  gl_Position = uViewProj * vec4(position, 1.0);
+}`;
+
+const fragmentShader = `#version 300 es
+precision highp float;
+in vec3 vPosition;
+in vec3 vNormal;
+in vec2 vUv;
+in float vCavity;
+uniform sampler2D uPrint;
+uniform vec3 uEye;
+uniform vec3 uColor;
+uniform float uGloss;
+uniform bool uCloth;
+out vec4 outColor;
+
+const vec3 KEY = normalize(vec3(-0.55, 0.62, 0.56));
+
+void main() {
+  vec3 n = normalize(vNormal) * (gl_FrontFacing ? 1.0 : -1.0);
+  vec3 v = normalize(uEye - vPosition);
+  vec3 h = normalize(KEY + v);
+  float facing = dot(n, KEY);
+  vec3 albedo = uColor;
+  float occlusion = 1.0;
+  if (uCloth) {
+    vec3 print = texture(uPrint, vUv).rgb;
+    // The ink shows through faintly, mirrored, on the back of the cloth.
+    albedo = gl_FrontFacing ? print : mix(vec3(0.2, 0.31, 0.25), print, 0.3);
+    albedo = pow(albedo, vec3(2.2));
+    // Valleys of the folds see less of the sky.
+    occlusion = clamp(1.0 - 9.0 * vCavity * (gl_FrontFacing ? 1.0 : -1.0), 0.45, 1.0);
+  }
+  // Wrapped diffuse for a soft weave, plus light passing through from the far side.
+  float diffuse = max(facing + 0.25, 0.0) / 1.25;
+  float transmitted = max(-facing, 0.0) * (uCloth ? 0.35 : 0.0);
+  float sky = 0.5 + 0.5 * n.y;
+  float sheen = pow(1.0 - max(dot(n, v), 0.0), 4.0) * (uCloth ? 0.12 : 0.0);
+  float spec = pow(max(dot(n, h), 0.0), mix(14.0, 90.0, uGloss)) * mix(0.04, 0.9, uGloss);
+  vec3 col = albedo * (vec3(1.0, 0.92, 0.8) * diffuse * 1.35 + vec3(0.26, 0.32, 0.38) * sky * occlusion
+                       + vec3(0.95, 0.78, 0.55) * transmitted);
+  col += (sheen + spec * smoothstep(-0.1, 0.2, facing)) * vec3(1.0, 0.94, 0.84) * occlusion;
+  outColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}`;
+
+const skyVertex = `#version 300 es
+in vec2 position;
+out vec2 vUv;
+void main() {
+  vUv = position * 0.5 + 0.5;
+  gl_Position = vec4(position, 0.999, 1.0);
+}`;
+
+// Overcast late-afternoon sky, warmer and hazier toward the horizon.
+const skyFragment = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform float uTime;
+out vec4 outColor;
+
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = fract(sin(dot(i, vec2(127.1, 311.7))) * 43758.5);
+  float b = fract(sin(dot(i + vec2(1, 0), vec2(127.1, 311.7))) * 43758.5);
+  float c = fract(sin(dot(i + vec2(0, 1), vec2(127.1, 311.7))) * 43758.5);
+  float d = fract(sin(dot(i + vec2(1, 1), vec2(127.1, 311.7))) * 43758.5);
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+void main() {
+  vec3 col = mix(vec3(0.86, 0.8, 0.68), vec3(0.5, 0.6, 0.65), smoothstep(0.05, 1.0, vUv.y));
+  vec2 p = vec2(vUv.x * 3.0 + uTime * 0.02, vUv.y * 6.0);
+  float cloud = noise(p) * 0.6 + noise(p * 2.3 + 4.0) * 0.3 + noise(p * 5.1) * 0.1;
+  col = mix(col, vec3(0.9, 0.88, 0.84), smoothstep(0.45, 0.85, cloud) * 0.35 * smoothstep(0.2, 0.8, vUv.y));
+  outColor = vec4(col * (1.0 - 0.18 * length(vUv - 0.5)), 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+function link(vertex, fragment) {
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+  gl.linkProgram(program);
+  return program;
+}
+
+const surface = link(vertexShader, fragmentShader);
+const skyProgram = link(skyVertex, skyFragment);
+
+// --- Simulation -------------------------------------------------------------
+
+const pos = new Float32Array(COUNT * 3);
+const prev = new Float32Array(COUNT * 3);
+const normals = new Float32Array(COUNT * 3);
+const cavity = new Float32Array(COUNT);
+const pins = [];
+const constraints = [];
+
+const index = (col, row) => row * COLS + col;
+
+for (let row = 0; row < ROWS; row++) {
+  for (let col = 0; col < COLS; col++) {
+    const i = index(col, row) * 3;
+    pos[i] = prev[i] = (col / (COLS - 1) - 0.5) * WIDTH;
+    pos[i + 1] = prev[i + 1] = TOP - (row / (ROWS - 1)) * HEIGHT;
+    pos[i + 2] = prev[i + 2] = 0;
+  }
+}
+for (let col = 0; col < COLS; col++) pins.push([index(col, 0), pos[col * 3], TOP]);
+
+// Stretch, shear and a softer skip-one link that gives linen its broad folds.
+function connect(c0, r0, c1, r1, stiffness) {
+  if (c1 >= COLS || r1 >= ROWS || c1 < 0) return;
+  const a = index(c0, r0), b = index(c1, r1);
+  const rest = Math.hypot(pos[a * 3] - pos[b * 3], pos[a * 3 + 1] - pos[b * 3 + 1]);
+  constraints.push(a, b, rest, stiffness);
+}
+for (let row = 0; row < ROWS; row++) {
+  for (let col = 0; col < COLS; col++) {
+    connect(col, row, col + 1, row, 1);
+    connect(col, row, col, row + 1, 1);
+    connect(col, row, col + 1, row + 1, 0.3);
+    connect(col, row, col - 1, row + 1, 0.3);
+    connect(col, row, col + 2, row, 0.08);
+    connect(col, row, col, row + 2, 0.08);
+  }
+}
+
+const triangles = [];
+for (let row = 0; row < ROWS - 1; row++) {
+  for (let col = 0; col < COLS - 1; col++) {
+    const a = index(col, row), b = index(col, row + 1), c = index(col + 1, row), d = index(col + 1, row + 1);
+    triangles.push(a, b, c, c, b, d);
+  }
+}
+
+function smoothNoise(t, seed) {
+  return Math.sin(t * 0.83 + seed) * 0.5 + Math.sin(t * 1.71 + seed * 2.3) * 0.3 + Math.sin(t * 3.1 + seed * 4.1) * 0.2;
+}
+
+// Gusts build and die over a few seconds; the direction wanders around a breeze from behind-left.
+function wind(t) {
+  const gust = Math.max(0, smoothNoise(t * 0.55, 1.3)) ** 2;
+  const strength = 1.6 + 6.5 * gust;
+  const heading = 0.65 + 0.35 * smoothNoise(t * 0.2, 4.7);
+  return [Math.sin(heading) * strength, 0.15 * strength * smoothNoise(t, 9.1), Math.cos(heading) * strength];
+}
+
+const STEP = 1 / 120;
+const GRAVITY = -9.8;
+const DRAG = 0.9;
+const AIR = 0.8;
+
+// Air pushes on each triangle along its normal, in proportion to the
+// wind's speed relative to the cloth, so a fold facing the gust billows.
+function applyWind(force, t) {
+  const [wx, wy, wz] = wind(t);
+  force.fill(0);
+  for (let k = 0; k < triangles.length; k += 3) {
+    const a = triangles[k] * 3, b = triangles[k + 1] * 3, c = triangles[k + 2] * 3;
+    const e1x = pos[b] - pos[a], e1y = pos[b + 1] - pos[a + 1], e1z = pos[b + 2] - pos[a + 2];
+    const e2x = pos[c] - pos[a], e2y = pos[c + 1] - pos[a + 1], e2z = pos[c + 2] - pos[a + 2];
+    const nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+    const area = Math.hypot(nx, ny, nz);
+    // Eddies that travel across the banner with the wind.
+    const x = pos[a], y = pos[a + 1];
+    const ripple = 1 + 0.8 * Math.sin(x * 6 - t * 7 + y * 3 + Math.sin(y * 4 + t)) * Math.sin(y * 7 + t * 5 - x * 2);
+    const eddyX = 1.5 * Math.sin(y * 5 + t * 6 + x), eddyZ = 2 * Math.sin(x * 5 - t * 8 + y * 3);
+    let vx = 0, vy = 0, vz = 0;
+    for (const p of [a, b, c]) {
+      vx += (pos[p] - prev[p]) / STEP;
+      vy += (pos[p + 1] - prev[p + 1]) / STEP;
+      vz += (pos[p + 2] - prev[p + 2]) / STEP;
+    }
+    const rx = wx * ripple + eddyX - vx / 3, ry = wy - vy / 3, rz = wz * ripple + eddyZ - vz / 3;
+    const push = (nx * rx + ny * ry + nz * rz) / (area * area) * AIR;
+    for (const p of [a, b, c]) {
+      force[p] += nx * push;
+      force[p + 1] += ny * push;
+      force[p + 2] += nz * push;
+    }
+  }
+}
+
+const force = new Float32Array(COUNT * 3);
+
+function step(t) {
+  applyWind(force, t);
+  for (let p = 0; p < COUNT; p++) {
+    const i = p * 3;
+    // The bottom rows carry a weighted hem.
+    const mass = Math.floor(p / COLS) >= ROWS - 2 ? 2.5 : 1;
+    for (let axis = 0; axis < 3; axis++) {
+      const velocity = (pos[i + axis] - prev[i + axis]) * DRAG ** (STEP * 4);
+      prev[i + axis] = pos[i + axis];
+      const accel = force[i + axis] / mass + (axis === 1 ? GRAVITY : 0);
+      pos[i + axis] += velocity + accel * STEP * STEP;
+    }
+  }
+  for (let iteration = 0; iteration < 10; iteration++) {
+    for (let k = 0; k < constraints.length; k += 4) {
+      const a = constraints[k] * 3, b = constraints[k + 1] * 3;
+      const dx = pos[b] - pos[a], dy = pos[b + 1] - pos[a + 1], dz = pos[b + 2] - pos[a + 2];
+      const length = Math.hypot(dx, dy, dz);
+      const correction = (length - constraints[k + 2]) / length * 0.5 * constraints[k + 3];
+      pos[a] += dx * correction; pos[a + 1] += dy * correction; pos[a + 2] += dz * correction;
+      pos[b] -= dx * correction; pos[b + 1] -= dy * correction; pos[b + 2] -= dz * correction;
+    }
+    for (const [p, x, y] of pins) {
+      pos[p * 3] = x;
+      pos[p * 3 + 1] = y;
+      pos[p * 3 + 2] = 0;
+    }
+  }
+}
+
+// Vertex normals, and how far each point sits below its neighbours along that normal.
+function shade() {
+  normals.fill(0);
+  for (let k = 0; k < triangles.length; k += 3) {
+    const a = triangles[k] * 3, b = triangles[k + 1] * 3, c = triangles[k + 2] * 3;
+    const e1x = pos[b] - pos[a], e1y = pos[b + 1] - pos[a + 1], e1z = pos[b + 2] - pos[a + 2];
+    const e2x = pos[c] - pos[a], e2y = pos[c + 1] - pos[a + 1], e2z = pos[c + 2] - pos[a + 2];
+    const nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+    for (const p of [a, b, c]) {
+      normals[p] += nx; normals[p + 1] += ny; normals[p + 2] += nz;
+    }
+  }
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      const p = index(col, row), i = p * 3;
+      const length = Math.hypot(normals[i], normals[i + 1], normals[i + 2]);
+      normals[i] /= length; normals[i + 1] /= length; normals[i + 2] /= length;
+      const l = index(Math.max(col - 1, 0), row) * 3, r = index(Math.min(col + 1, COLS - 1), row) * 3;
+      const u = index(col, Math.max(row - 1, 0)) * 3, d = index(col, Math.min(row + 1, ROWS - 1)) * 3;
+      let depth = 0;
+      for (let axis = 0; axis < 3; axis++) {
+        depth += ((pos[l + axis] + pos[r + axis] + pos[u + axis] + pos[d + axis]) / 4 - pos[i + axis]) * normals[i + axis];
+      }
+      cavity[p] = depth;
+    }
+  }
+}
+
+// --- Geometry ---------------------------------------------------------------
+
+function buffer(program, name, data, size, usage = gl.STATIC_DRAW) {
+  const handle = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, handle);
+  gl.bufferData(gl.ARRAY_BUFFER, data, usage);
+  const location = gl.getAttribLocation(program, name);
+  gl.enableVertexAttribArray(location);
+  gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
+  return handle;
+}
+
+const clothVao = gl.createVertexArray();
+gl.bindVertexArray(clothVao);
+const uvs = new Float32Array(COUNT * 2);
+for (let p = 0; p < COUNT; p++) {
+  uvs[p * 2] = (p % COLS) / (COLS - 1);
+  uvs[p * 2 + 1] = Math.floor(p / COLS) / (ROWS - 1);
+}
+const positionBuffer = buffer(surface, 'position', pos, 3, gl.DYNAMIC_DRAW);
+const normalBuffer = buffer(surface, 'normal', normals, 3, gl.DYNAMIC_DRAW);
+const cavityBuffer = buffer(surface, 'cavity', cavity, 1, gl.DYNAMIC_DRAW);
+buffer(surface, 'uv', uvs, 2);
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(triangles), gl.STATIC_DRAW);
+
+// A turned wooden rod with brass knobs, hung by a cord from above the frame.
+function solid(parts) {
+  const positions = [], normalsOut = [];
+  for (const part of parts) {
+    for (let i = 0; i < part.positions.length; i++) {
+      positions.push(part.positions[i]);
+      normalsOut.push(part.normals[i]);
+    }
+  }
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  buffer(surface, 'position', new Float32Array(positions), 3);
+  buffer(surface, 'normal', new Float32Array(normalsOut), 3);
+  return { vao, count: positions.length / 3 };
+}
+
+// A surface of revolution around the segment from a to b, radius(u) for u in 0..1.
+function lathe(a, b, radius, rings = 16, sides = 20) {
+  const axis = b.map((v, i) => v - a[i]);
+  const length = Math.hypot(...axis);
+  const w = axis.map((v) => v / length);
+  const helper = Math.abs(w[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  const u = normalize(cross(helper, w)), v = cross(w, u);
+  const point = (i, j) => {
+    const t = i / rings, angle = (j / sides) * Math.PI * 2;
+    const r = radius(t), slope = (radius(t + 0.001) - radius(t - 0.001)) / (0.002 * length);
+    const radial = u.map((x, k) => x * Math.cos(angle) + v[k] * Math.sin(angle));
+    return {
+      p: a.map((x, k) => x + axis[k] * t + radial[k] * r),
+      n: normalize(radial.map((x, k) => x - w[k] * slope)),
+    };
+  };
+  const positions = [], normalsOut = [];
+  for (let i = 0; i < rings; i++) {
+    for (let j = 0; j < sides; j++) {
+      const quad = [point(i, j), point(i + 1, j), point(i, j + 1), point(i, j + 1), point(i + 1, j), point(i + 1, j + 1)];
+      for (const { p, n } of quad) {
+        positions.push(...p);
+        normalsOut.push(...n);
+      }
+    }
+  }
+  return { positions, normals: normalsOut };
+}
+
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const normalize = (a) => a.map((x) => x / (Math.hypot(...a) || 1));
+
+const ROD_Y = TOP + 0.008, ROD_END = 0.6;
+const knob = (t) => 0.034 * Math.sqrt(Math.max(t * (1 - t), 0)) * 2;
+const rod = solid([lathe([-ROD_END, ROD_Y, 0], [ROD_END, ROD_Y, 0], () => 0.016, 1)]);
+const knobs = solid([
+  lathe([-ROD_END - 0.065, ROD_Y, 0], [-ROD_END, ROD_Y, 0], knob),
+  lathe([ROD_END, ROD_Y, 0], [ROD_END + 0.065, ROD_Y, 0], knob),
+]);
+const cord = solid([
+  lathe([-ROD_END + 0.02, ROD_Y, 0], [0, ROD_Y + 0.55, 0], () => 0.003, 1, 6),
+  lathe([ROD_END - 0.02, ROD_Y, 0], [0, ROD_Y + 0.55, 0], () => 0.003, 1, 6),
+]);
+
+const skyVao = gl.createVertexArray();
+gl.bindVertexArray(skyVao);
+buffer(skyProgram, 'position', new Float32Array([-1, -1, 3, -1, -1, 3]), 2);
+
+const texture = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, texture);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, printBanner());
+gl.generateMipmap(gl.TEXTURE_2D);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+
+// --- Camera -----------------------------------------------------------------
+
+function viewProjection(aspect) {
+  const fov = 0.5, target = [0, 0, 0];
+  // Back off far enough that the banner and rod fit in either orientation.
+  const distance = Math.max(0.78, 0.76 / aspect) / Math.tan(fov / 2);
+  const eye = target.map((x, i) => x + [0.3, -0.06, 1][i] * distance / Math.hypot(0.3, -0.06, 1));
+  const f = normalize(target.map((x, i) => x - eye[i]));
+  const r = normalize(cross(f, [0, 1, 0]));
+  const u = cross(r, f);
+  const near = 0.1, far = 20, k = 1 / Math.tan(fov / 2);
+  const view = [
+    r[0], u[0], -f[0], 0,
+    r[1], u[1], -f[1], 0,
+    r[2], u[2], -f[2], 0,
+    -dot(r, eye), -dot(u, eye), dot(f, eye), 1,
+  ];
+  const projection = [
+    k / aspect, 0, 0, 0,
+    0, k, 0, 0,
+    0, 0, (far + near) / (near - far), -1,
+    0, 0, (2 * far * near) / (near - far), 0,
+  ];
+  return { eye, matrix: multiply(projection, view) };
+}
+
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+function multiply(a, b) {
+  const out = new Array(16).fill(0);
+  for (let col = 0; col < 4; col++)
+    for (let row = 0; row < 4; row++)
+      for (let k = 0; k < 4; k++) out[col * 4 + row] += a[k * 4 + row] * b[col * 4 + k];
+  return out;
+}
+
+// --- Frame ------------------------------------------------------------------
+
+const uniforms = {};
+for (const name of ['uViewProj', 'uEye', 'uColor', 'uGloss', 'uCloth', 'uPrint']) {
+  uniforms[name] = gl.getUniformLocation(surface, name);
+}
+const uSkyTime = gl.getUniformLocation(skyProgram, 'uTime');
+
+function drawSolid(mesh, color, gloss) {
+  gl.uniform1i(uniforms.uCloth, 0);
+  gl.uniform3fv(uniforms.uColor, color);
+  gl.uniform1f(uniforms.uGloss, gloss);
+  gl.bindVertexArray(mesh.vao);
+  gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
+}
+
+gl.enable(gl.DEPTH_TEST);
+
+let simTime = 0, accumulator = 0, last = performance.now();
+// Settle the drop before the first frame so it starts hanging, not flat.
+for (let i = 0; i < 240; i++) step((simTime += STEP));
+
+function frame(ms) {
+  const dt = Math.min((ms - last) / 1000, 0.05);
+  last = ms;
+  accumulator += dt;
+  for (let n = 0; accumulator >= STEP && n < 6; n++, accumulator -= STEP) step((simTime += STEP));
+  accumulator = Math.min(accumulator, STEP);
+  shade();
+
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    gl.viewport(0, 0, w, h);
+  }
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  gl.useProgram(skyProgram);
+  gl.uniform1f(uSkyTime, ms / 1000);
+  gl.bindVertexArray(skyVao);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  const camera = viewProjection(w / h);
+  gl.useProgram(surface);
+  gl.uniformMatrix4fv(uniforms.uViewProj, false, camera.matrix);
+  gl.uniform3fv(uniforms.uEye, camera.eye);
+  drawSolid(rod, [0.2, 0.1, 0.05], 0.35);
+  drawSolid(knobs, [0.55, 0.38, 0.15], 0.9);
+  drawSolid(cord, [0.5, 0.45, 0.36], 0.0);
+
+  gl.bindVertexArray(clothVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, pos);
+  gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, normals);
+  gl.bindBuffer(gl.ARRAY_BUFFER, cavityBuffer);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, cavity);
+  gl.uniform1i(uniforms.uCloth, 1);
+  gl.uniform1i(uniforms.uPrint, 0);
+  gl.uniform3fv(uniforms.uColor, [1, 1, 1]);
+  gl.uniform1f(uniforms.uGloss, 0);
+  gl.drawElements(gl.TRIANGLES, triangles.length, gl.UNSIGNED_SHORT, 0);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

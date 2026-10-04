@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smoke</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #dcd8cf; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('Float render targets are not supported');
+
+// The flow is solved on cells of fixed size in mushroom units, so the
+// thumbnail shows the same flow as the full view. Smoke is carried on a
+// grid twice as fine to keep the streaks thin.
+const CELLS = 150;
+const DYE_SCALE = 2;
+const WIND = 0.4 * CELLS;
+const PRESSURE_ITERATIONS = 30;
+
+const quad = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const shape = `
+float sdEllipse(vec2 p, vec2 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom in profile: y up, ground at 0, cap about 1.12 wide, top near 1.11.
+// Returns signed distance (negative inside) and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom2D(vec2 p) {
+  p.x -= 0.05 * p.y * p.y;
+  float r = abs(p.x);
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43);
+  float ring = max(r - 0.096 - (0.66 - p.y) * 0.32, abs(p.y - 0.605) - 0.05);
+  float under = 0.82 + 0.02 * (1.0 - min(r * r / 0.3125, 1.0));
+  float cap = max(sdEllipse(p - vec2(0.0, 0.8), vec2(0.56, 0.31)), under - p.y);
+  float gills = max(r - 0.55, max(p.y - under, 0.8 + 0.015 * (1.0 - min(r * r / 0.27, 1.0)) - p.y));
+  stem = max(stem, -min(cap, gills));
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  if (stem < res.x) res = vec2(stem, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+`;
+
+// A smoke wire across the inlet: thin streams at a fixed pitch above the floor.
+const rake = `
+float rake(float y) {
+  const float PITCH = 0.065;
+  float d = abs(fract(y / PITCH) - 0.5) * PITCH;
+  return step(0.02, y) * (1.0 - smoothstep(0.003, 0.006, d));
+}`;
+
+const mask = `#version 300 es
+precision highp float;
+uniform vec2 uOrigin;
+out vec4 outMask;
+${shape}
+
+void main() {
+  vec2 p = uOrigin + gl_FragCoord.xy / ${CELLS}.0;
+  outMask = vec4(mushroom2D(p).x < 0.0 ? 1.0 : 0.0);
+}`;
+
+const fill = `#version 300 es
+precision highp float;
+uniform sampler2D uMask;
+uniform vec2 uOrigin;
+uniform vec2 uDyeGrid;
+out vec4 outDye;
+${rake}
+
+void main() {
+  vec2 frag = gl_FragCoord.xy;
+  float solid = texture(uMask, frag / uDyeGrid).r;
+  outDye = vec4(rake(uOrigin.y + frag.y / ${CELLS * DYE_SCALE}.0) * (1.0 - solid));
+}`;
+
+// Velocities are in cells per second; pressure is in matching units.
+const fieldHelpers = `
+uniform sampler2D uVelocity;
+uniform sampler2D uMask;
+uniform vec2 uGrid;
+
+ivec2 inside(ivec2 c) { return clamp(c, ivec2(0), ivec2(uGrid) - 1); }
+bool solid(ivec2 c) { return texelFetch(uMask, inside(c), 0).r > 0.5; }
+bool beyondWall(ivec2 c) { return c.y < 0 || c.y >= int(uGrid.y); }
+
+// The floor and ceiling are smooth: the flow slides along them but not through.
+vec2 velocity(ivec2 c) {
+  if (solid(c)) return vec2(0.0);
+  vec2 v = texelFetch(uVelocity, inside(c), 0).xy;
+  return beyondWall(c) ? vec2(v.x, -v.y) : v;
+}
+`;
+
+// Semi-Lagrangian advection; the inlet holds a steady wind.
+const advect = `#version 300 es
+precision highp float;
+uniform float uDt;
+uniform float uWind;
+out vec4 outVelocity;
+${fieldHelpers}
+
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy);
+  if (solid(c)) { outVelocity = vec4(0.0); return; }
+  if (c.x < 2) { outVelocity = vec4(uWind, 0.0, 0.0, 0.0); return; }
+  vec2 from = gl_FragCoord.xy - velocity(c) * uDt;
+  outVelocity = vec4(texture(uVelocity, from / uGrid).xy, 0.0, 0.0);
+}`;
+
+const divergence = `#version 300 es
+precision highp float;
+out vec4 outDivergence;
+${fieldHelpers}
+
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy);
+  float d = velocity(c + ivec2(1, 0)).x - velocity(c - ivec2(1, 0)).x
+          + velocity(c + ivec2(0, 1)).y - velocity(c - ivec2(0, 1)).y;
+  outDivergence = vec4(0.5 * d);
+}`;
+
+// Walls reflect the pressure of the cell beside them; the outlet is open.
+const pressureHelpers = `
+uniform sampler2D uPressure;
+
+float pressure(ivec2 c, float wall) {
+  if (c.x >= int(uGrid.x)) return 0.0;
+  return solid(c) || beyondWall(c) ? wall : texelFetch(uPressure, inside(c), 0).x;
+}
+`;
+
+const jacobi = `#version 300 es
+precision highp float;
+uniform sampler2D uDivergence;
+out vec4 outPressure;
+${fieldHelpers}
+${pressureHelpers}
+
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy);
+  float centre = texelFetch(uPressure, c, 0).x;
+  float sum = pressure(c + ivec2(1, 0), centre) + pressure(c - ivec2(1, 0), centre)
+            + pressure(c + ivec2(0, 1), centre) + pressure(c - ivec2(0, 1), centre);
+  outPressure = vec4((sum - texelFetch(uDivergence, c, 0).x) * 0.25);
+}`;
+
+const project = `#version 300 es
+precision highp float;
+out vec4 outVelocity;
+${fieldHelpers}
+${pressureHelpers}
+
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy);
+  vec2 v = velocity(c);
+  if (solid(c) || c.x < 2) { outVelocity = vec4(v, 0.0, 0.0); return; }
+  float centre = texelFetch(uPressure, c, 0).x;
+  v -= 0.5 * vec2(pressure(c + ivec2(1, 0), centre) - pressure(c - ivec2(1, 0), centre),
+                  pressure(c + ivec2(0, 1), centre) - pressure(c - ivec2(0, 1), centre));
+  outVelocity = vec4(v, 0.0, 0.0);
+}`;
+
+// Smoke uses MacCormack advection (Selle et al. 2008): a forward step, then a
+// correction from stepping back, clamped so it cannot overshoot.
+const dyeForward = `#version 300 es
+precision highp float;
+uniform sampler2D uDye;
+uniform sampler2D uVelocity;
+uniform vec2 uDyeGrid;
+uniform float uDt;
+out vec4 outDye;
+
+void main() {
+  vec2 frag = gl_FragCoord.xy;
+  vec2 shift = texture(uVelocity, frag / uDyeGrid).xy * uDt * ${DYE_SCALE}.0;
+  outDye = texture(uDye, (frag - shift) / uDyeGrid);
+}`;
+
+const dyeCorrect = `#version 300 es
+precision highp float;
+uniform sampler2D uDye;
+uniform sampler2D uForward;
+uniform sampler2D uVelocity;
+uniform sampler2D uMask;
+uniform vec2 uDyeGrid;
+uniform vec2 uOrigin;
+uniform float uDt;
+uniform float uWire;
+uniform float uFade;
+out vec4 outDye;
+${rake}
+
+float dye(ivec2 c) { return texelFetch(uDye, clamp(c, ivec2(0), ivec2(uDyeGrid) - 1), 0).x; }
+
+void main() {
+  vec2 frag = gl_FragCoord.xy;
+  vec2 uv = frag / uDyeGrid;
+  if (texture(uMask, uv).r > 0.5) { outDye = vec4(0.0); return; }
+  if (frag.x < 3.0) { outDye = vec4(uWire * rake(uOrigin.y + frag.y / ${CELLS * DYE_SCALE}.0)); return; }
+  vec2 shift = texture(uVelocity, uv).xy * uDt * ${DYE_SCALE}.0;
+  float forward = texture(uForward, uv).x;
+  float back = texture(uForward, (frag + shift) / uDyeGrid).x;
+  float corrected = forward + 0.5 * (dye(ivec2(frag)) - back);
+  ivec2 i = ivec2(floor(frag - shift - 0.5));
+  vec4 near = vec4(dye(i), dye(i + ivec2(1, 0)), dye(i + ivec2(0, 1)), dye(i + ivec2(1, 1)));
+  corrected = clamp(corrected, min(min(near.x, near.y), min(near.z, near.w)),
+                               max(max(near.x, near.y), max(near.z, near.w)));
+  outDye = vec4(corrected * (1.0 - uFade * uDt));
+}`;
+
+const display = `#version 300 es
+precision highp float;
+uniform sampler2D uDye;
+uniform vec2 uResolution;
+uniform vec3 uView;
+uniform vec2 uOrigin;
+uniform vec2 uGrid;
+out vec4 outColor;
+${shape}
+
+const vec3 WARTS[14] = vec3[](
+  vec3(-0.02, 1.07, 0.03), vec3(0.17, 1.05, 0.026), vec3(-0.22, 1.03, 0.028), vec3(0.33, 0.99, 0.03),
+  vec3(-0.38, 0.96, 0.024), vec3(0.06, 0.99, 0.034), vec3(-0.12, 0.94, 0.022), vec3(0.22, 0.93, 0.025),
+  vec3(0.44, 0.9, 0.02), vec3(-0.47, 0.88, 0.018), vec3(-0.28, 0.89, 0.026), vec3(0.1, 0.88, 0.02),
+  vec3(0.34, 0.875, 0.017), vec3(-0.06, 0.88, 0.016));
+
+float wart(vec2 p) {
+  float d = 1e3;
+  for (int i = 0; i < 14; i++) {
+    vec2 q = p - WARTS[i].xy - vec2(0.032, 0.0);
+    d = min(d, length(q * vec2(1.0, 1.25)) - WARTS[i].z);
+  }
+  return d;
+}
+
+// Painted in the canonical colours, lit from the upper left.
+vec3 mushroomColor(vec2 p, float part, float pixel) {
+  float across = (p.x - 0.05 * p.y * p.y) / 0.12;
+  if (part == 1.0) return vec3(0.82, 0.78, 0.68) * (0.86 + 0.08 * sin(p.x * 260.0));
+  if (part != 0.0) return vec3(0.91, 0.89, 0.82) * mix(1.0, 0.76, smoothstep(-0.7, 1.0, across));
+  vec2 dome = (p - vec2(0.0, 0.8)) / vec2(0.56, 0.31);
+  vec3 skin = mix(vec3(0.43, 0.075, 0.043), vec3(0.72, 0.196, 0.102), smoothstep(0.15, 1.0, length(dome)));
+  skin *= 1.0 + 0.12 * dot(normalize(dome + vec2(0.0, 0.3)), normalize(vec2(-0.5, 1.0)));
+  return mix(vec3(0.94, 0.91, 0.84), skin, smoothstep(-pixel, pixel, wart(p)));
+}
+
+void main() {
+  vec2 frag = gl_FragCoord.xy;
+  vec2 p = (frag - uView.xy) / uView.z;
+  float pixel = 1.0 / uView.z;
+
+  vec2 q = frag / uResolution - vec2(0.45, 0.55);
+  vec3 col = mix(vec3(0.88, 0.865, 0.83), vec3(0.77, 0.755, 0.72), smoothstep(0.2, 0.95, length(q)));
+  float smoke = texture(uDye, (p - uOrigin) * ${CELLS}.0 / uGrid).x;
+  col = mix(col, vec3(0.16, 0.19, 0.23), 0.85 * (1.0 - exp(-2.2 * smoke)));
+
+  vec3 floorColor = mix(vec3(0.5, 0.47, 0.42), vec3(0.36, 0.34, 0.3), smoothstep(0.0, -0.3, p.y));
+  col = mix(floorColor, col, smoothstep(-pixel, pixel, p.y));
+
+  vec2 body = mushroom2D(p);
+  vec3 painted = mushroomColor(p, body.y, pixel);
+  // A darker rim gives the silhouette a crisp edge against pale smoke.
+  painted *= 1.0 - 0.3 * smoothstep(-4.0 * pixel, 0.0, body.x);
+  col = mix(painted, col, smoothstep(-pixel, pixel, body.x));
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+function link(fragment) {
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, quad));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+  gl.bindAttribLocation(program, 0, 'position');
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+  const uniforms = {};
+  for (let i = 0; i < gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS); i++) {
+    const name = gl.getActiveUniform(program, i).name;
+    uniforms[name] = gl.getUniformLocation(program, name);
+  }
+  return { program, uniforms };
+}
+
+const programs = Object.fromEntries(Object.entries({
+  mask, fill, advect, divergence, jacobi, project, dyeForward, dyeCorrect, display,
+}).map(([name, source]) => [name, link(source)]));
+
+gl.bindVertexArray(gl.createVertexArray());
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+function target([width, height], format, filter) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, format, width, height);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const framebuffer = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+  gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
+  return { texture, framebuffer, width, height };
+}
+
+// Binds the program, output and input textures, then sets the uniforms by name.
+function run(name, output, inputs, values) {
+  const { program, uniforms } = programs[name];
+  gl.useProgram(program);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, output ? output.framebuffer : null);
+  gl.viewport(0, 0, output ? output.width : canvas.width, output ? output.height : canvas.height);
+  Object.entries(inputs).forEach(([uniform, texture], unit) => {
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, texture.texture);
+    gl.uniform1i(uniforms[uniform], unit);
+  });
+  for (const [uniform, value] of Object.entries(values)) {
+    if (!uniforms[uniform]) continue;
+    if (value.length === 3) gl.uniform3fv(uniforms[uniform], value);
+    else if (value.length === 2) gl.uniform2fv(uniforms[uniform], value);
+    else gl.uniform1f(uniforms[uniform], value);
+  }
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+// Where the mushroom stands on screen, and the tunnel of cells around it.
+function layout(w, h) {
+  // Portrait screens are limited by width, leaving the smoke room either side.
+  const s = Math.min(w * 0.65, h * 0.58);
+  // In landscape the mushroom stands left of centre so its wake has room.
+  const x = w / 2 - 0.3 * Math.max(w - 1.4 * s, 0);
+  const y = h / 2 - 0.52 * s;
+  const origin = [-x / s - 2 / CELLS, 0];
+  const grid = [Math.ceil(w / s * CELLS) + 4, Math.ceil((h - y) / s * CELLS) + 1];
+  return { view: [x, y, s], origin, grid, dyeGrid: grid.map((n) => n * DYE_SCALE) };
+}
+
+let tunnel;
+
+function build(next) {
+  if (tunnel) {
+    for (const t of Object.values(tunnel.fields).flat()) {
+      gl.deleteTexture(t.texture);
+      gl.deleteFramebuffer(t.framebuffer);
+    }
+  }
+  const { grid, dyeGrid } = next;
+  next.fields = {
+    mask: target(grid, gl.RGBA8, gl.NEAREST),
+    velocity: [target(grid, gl.RGBA16F, gl.LINEAR), target(grid, gl.RGBA16F, gl.LINEAR)],
+    divergence: target(grid, gl.RGBA16F, gl.NEAREST),
+    pressure: [target(grid, gl.RGBA32F, gl.NEAREST), target(grid, gl.RGBA32F, gl.NEAREST)],
+    dye: [target(dyeGrid, gl.RGBA16F, gl.LINEAR), target(dyeGrid, gl.RGBA16F, gl.LINEAR)],
+    forward: target(dyeGrid, gl.RGBA16F, gl.LINEAR),
+  };
+  tunnel = next;
+  const { fields, origin } = tunnel;
+  run('mask', fields.mask, {}, { uOrigin: origin });
+  // The first run starts with the smoke streams already laid straight through,
+  // so the first frames show them bending around the mushroom.
+  restart();
+  run('fill', fields.dye[0], { uMask: fields.mask }, { uOrigin: origin, uDyeGrid: dyeGrid });
+}
+
+// The wind starts impulsively in an empty tunnel, which rolls up a fresh wake.
+function restart() {
+  const { velocity, pressure, dye } = tunnel.fields;
+  for (const [t, value] of [[velocity[0], WIND], ...[...pressure, ...dye].map((t) => [t, 0])]) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.framebuffer);
+    gl.clearBufferfv(gl.COLOR, 0, [value, 0, 0, 0]);
+  }
+}
+
+// One run of the tunnel in seconds. The smoke wire is pulsed, as in real
+// smoke-wire studies; once it stops, the last smoke thins and washes out and
+// the flow restarts unseen in the empty tunnel.
+const CYCLE = 15, WIRE_OFF = 9;
+
+const STEPS_PER_SECOND = 60;
+const MAX_STEPS_PER_FRAME = 2;
+const DT = 1 / STEPS_PER_SECOND;
+
+function step(phase) {
+  const { fields, origin, grid, dyeGrid } = tunnel;
+  const { mask, velocity, pressure, dye } = fields;
+  // Smoke thins slowly while the wire runs, so eddies trapped behind the cap
+  // cannot darken forever, then quickly once it stops so the tunnel clears.
+  const clearing = Math.min(Math.max((phase - WIRE_OFF - 2) / (CYCLE - WIRE_OFF - 2), 0), 1);
+  const values = {
+    uGrid: grid, uDyeGrid: dyeGrid, uOrigin: origin, uDt: DT, uWind: WIND,
+    uWire: phase < WIRE_OFF ? 1 : 0, uFade: 0.04 + 1.2 * clearing,
+  };
+
+  run('advect', velocity[1], { uVelocity: velocity[0], uMask: mask }, values);
+  velocity.reverse();
+  run('divergence', fields.divergence, { uVelocity: velocity[0], uMask: mask }, values);
+  for (let i = 0; i < PRESSURE_ITERATIONS; i++) {
+    run('jacobi', pressure[1], { uPressure: pressure[0], uDivergence: fields.divergence, uMask: mask }, values);
+    pressure.reverse();
+  }
+  run('project', velocity[1], { uVelocity: velocity[0], uPressure: pressure[0], uMask: mask }, values);
+  velocity.reverse();
+
+  run('dyeForward', fields.forward, { uDye: dye[0], uVelocity: velocity[0] }, values);
+  run('dyeCorrect', dye[1], {
+    uDye: dye[0], uForward: fields.forward, uVelocity: velocity[0], uMask: mask,
+  }, values);
+  dye.reverse();
+}
+
+let time = 0, pending = 0;
+let last = performance.now();
+function frame(ms) {
+  const dt = Math.min((ms - last) / 1000, 0.1);
+  last = ms;
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    const next = layout(w, h);
+    // The flow only restarts when the tunnel's shape changes, not its pixel size.
+    if (!tunnel || next.grid.some((n, i) => n !== tunnel.grid[i])) build(next);
+    else Object.assign(tunnel, { view: next.view });
+  }
+
+  pending = Math.min(pending + dt * STEPS_PER_SECOND, MAX_STEPS_PER_FRAME);
+  for (; pending >= 1; pending--) {
+    const before = time;
+    time += DT;
+    if (Math.floor(time / CYCLE) !== Math.floor(before / CYCLE)) restart();
+    step(time % CYCLE);
+  }
+
+  run('display', null, { uDye: tunnel.fields.dye[0] }, {
+    uResolution: [w, h], uView: tunnel.view, uOrigin: tunnel.origin, uGrid: tunnel.grid,
+  });
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

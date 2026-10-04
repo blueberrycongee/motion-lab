@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Menu</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    --w: min(64vmin, 88vw);
+    display: grid;
+    justify-items: center;
+    align-content: start;
+    padding-top: calc(50vh - var(--w) * 0.5);
+    box-sizing: border-box;
+    background: radial-gradient(ellipse at 50% 30%, #4b5b70, #334052 70%, #2b3646);
+  }
+  .menu { width: var(--w); }
+  .trigger {
+    all: unset;
+    display: block;
+    width: 100%;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .trigger svg { display: block; width: 100%; overflow: visible; }
+  .trigger:focus-visible .face { stroke: #efe7d688; stroke-width: 14; }
+  .spots ellipse { transform-box: fill-box; transform-origin: center; }
+  .items {
+    position: relative;
+    list-style: none;
+    margin: calc(var(--w) * 0.02) auto 0;
+    padding: 0;
+    width: 78%;
+  }
+  .items[inert] { pointer-events: none; }
+  .glow {
+    position: absolute;
+    left: -4%;
+    right: -4%;
+    top: 0;
+    height: calc(var(--w) * 0.15);
+    border-radius: calc(var(--w) * 0.05);
+    background: #efe7d614;
+    opacity: 0;
+    transition: opacity 200ms ease-out;
+  }
+  .glow.on { opacity: 1; }
+  .item {
+    all: unset;
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: calc(var(--w) * 0.05);
+    width: 100%;
+    height: calc(var(--w) * 0.15);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .fall, .drop { display: block; }
+  .fall { width: calc(var(--w) * 0.13); margin-left: calc(var(--w) * 0.02); opacity: 0; }
+  .drop { transform-origin: 50% 100%; }
+  .drop svg { display: block; width: 100%; aspect-ratio: 1240 / 1160; overflow: visible; }
+  .bar {
+    height: calc(var(--w) * 0.032);
+    width: var(--len);
+    border-radius: calc(var(--w) * 0.02);
+    background: #d9cfbd;
+    transform-origin: 0 50%;
+    transform: scaleX(0);
+    transition: background-color 200ms ease-out;
+  }
+  .item.hot .bar { background: #f3ece0; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position: absolute">
+  <defs>
+    <radialGradient id="capShade" cx="-60" cy="-1110" r="660" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6e130b"/>
+      <stop offset="1" stop-color="#b8321a"/>
+    </radialGradient>
+    <symbol id="shroom" viewBox="-620 -1160 1240 1160">
+      <path fill="#e8e2d2" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+      <path fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+      <path fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+      <path fill="url(#capShade)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+      <g fill="#efe7d6">
+        <ellipse cx="12" cy="-1070" rx="40" ry="32"/>
+        <ellipse cx="-188" cy="-1010" rx="38" ry="30"/>
+        <ellipse cx="362" cy="-990" rx="40" ry="32"/>
+        <ellipse cx="-348" cy="-920" rx="34" ry="27"/>
+        <ellipse cx="132" cy="-930" rx="44" ry="35"/>
+        <ellipse cx="452" cy="-890" rx="28" ry="22"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+<nav class="menu">
+  <button class="trigger" aria-haspopup="menu" aria-expanded="false" aria-label="Menu">
+    <svg viewBox="-620 -1160 1240 420">
+      <path class="gills" fill="#d2c6ad" opacity="0" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+      <path class="face" fill="#efe7d6"/>
+      <path class="dome" fill="url(#capShade)" opacity="0"/>
+      <g class="spots" fill="#efe7d6">
+        <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+        <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+        <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+        <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+        <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+        <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+        <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+        <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+        <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+        <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+        <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+        <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+      </g>
+      <g class="lines" stroke-linecap="round">
+        <line/><line/><line/>
+      </g>
+    </svg>
+  </button>
+  <ul class="items" role="menu" inert>
+    <li class="glow" role="none"></li>
+    <li role="none"><button class="item" role="menuitem" style="--len: 64%"><span class="fall"><span class="drop"><svg><use href="#shroom"/></svg></span></span><span class="bar"></span></button></li>
+    <li role="none"><button class="item" role="menuitem" style="--len: 46%"><span class="fall"><span class="drop"><svg><use href="#shroom"/></svg></span></span><span class="bar"></span></button></li>
+    <li role="none"><button class="item" role="menuitem" style="--len: 56%"><span class="fall"><span class="drop"><svg><use href="#shroom"/></svg></span></span><span class="bar"></span></button></li>
+    <li role="none"><button class="item" role="menuitem" style="--len: 38%"><span class="fall"><span class="drop"><svg><use href="#shroom"/></svg></span></span><span class="bar"></span></button></li>
+  </ul>
+</nav>
+<script type="module">
+const trigger = document.querySelector('.trigger');
+const face = trigger.querySelector('.face');
+const dome = trigger.querySelector('.dome');
+const gills = trigger.querySelector('.gills');
+const spots = [...trigger.querySelectorAll('.spots ellipse')];
+const lines = [...trigger.querySelectorAll('.lines line')];
+const list = document.querySelector('.items');
+const glow = list.querySelector('.glow');
+const items = [...list.querySelectorAll('.item')];
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function spring(stiffness, damping) {
+  const dt = 1 / 120;
+  const samples = [];
+  let x = 0, v = 0;
+  while (samples.length < 600) {
+    v += ((1 - x) * stiffness - v * damping) * dt;
+    x += v * dt;
+    samples.push(x);
+    if (Math.abs(1 - x) < 0.001 && Math.abs(v) < 0.01) break;
+  }
+  const stops = samples.filter((_, i) => i % 3 === 2).map((s) => s.toFixed(3));
+  return { easing: `linear(0, ${stops.join(', ')}, 1)`, duration: samples.length * dt * 1000 };
+}
+
+const mix = (a, b, k) => a + (b - a) * k;
+const clamp01 = (k) => Math.min(Math.max(k, 0), 1);
+const span = (k, from, to) => clamp01((k - from) / (to - from));
+
+// Both outlines are four cubic segments, so the round button can bend point for point
+// into the cap: right, top, left, bottom.
+const BUTTON = [
+  [222, -950], [222, -1055], [137, -1140], [32, -1140], [-73, -1140], [-158, -1055],
+  [-158, -950], [-158, -845], [-73, -760], [32, -760], [137, -760], [222, -845],
+];
+const CAP = [
+  [591, -820], [591, -990], [341, -1126], [32, -1126], [-277, -1126], [-527, -990],
+  [-527, -820], [-340, -826], [-150, -830], [32, -830], [214, -830], [404, -826],
+];
+
+function outline(k) {
+  const p = BUTTON.map(([x, y], i) => [mix(x, CAP[i][0], k), mix(y, CAP[i][1], k)].map((n) => n.toFixed(1)).join(' '));
+  return `M${p[0]} C${p[1]} ${p[2]} ${p[3]} C${p[4]} ${p[5]} ${p[6]} C${p[7]} ${p[8]} ${p[9]} C${p[10]} ${p[11]} ${p[0]} Z`;
+}
+
+// The outer bars shrink into two of the cap's warts; the middle bar stretches into the gill rim.
+const LINES = [
+  { from: [-78, -1010, 142, -1010], to: [92, -990, 92, -990], width: [34, 68] },
+  { from: [-78, -950, 142, -950], to: [-500, -814, 564, -814], width: [34, 20] },
+  { from: [-78, -890, 142, -890], to: [-188, -1030, -188, -1030], width: [34, 56] },
+];
+const INK = [43, 47, 58];
+const CREAM = [239, 231, 214];
+const RIM = [210, 198, 173];
+
+function rgb(a, b, k) {
+  return `rgb(${a.map((v, i) => Math.round(mix(v, b[i], k))).join(' ')})`;
+}
+
+function draw(m) {
+  const k = calm ? clamp01(m) : m;
+  face.setAttribute('d', outline(k));
+  dome.setAttribute('d', outline(k));
+  dome.setAttribute('opacity', span(m, 0.15, 0.6).toFixed(2));
+  gills.setAttribute('opacity', span(m, 0.55, 0.9).toFixed(2));
+  const fade = span(m, 0.3, 0.7);
+  lines.forEach((line, i) => {
+    const { from, to, width } = LINES[i];
+    ['x1', 'y1', 'x2', 'y2'].forEach((key, j) => line.setAttribute(key, mix(from[j], to[j], k).toFixed(1)));
+    line.setAttribute('stroke-width', mix(width[0], width[1], clamp01(k)).toFixed(1));
+    line.setAttribute('stroke', rgb(INK, i === 1 ? RIM : CREAM, fade));
+    if (i === 1) line.setAttribute('opacity', (1 - span(m, 0.75, 1)).toFixed(2));
+  });
+}
+
+// The morph runs on a slightly underdamped spring so the cap overshoots wide and settles.
+const shape = { m: 0, v: 0, target: 0 };
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 1 / 30);
+  last = now;
+  const k = calm ? 300 : 150;
+  const c = 2 * Math.sqrt(k) * (calm ? 1 : 0.62);
+  shape.v += ((shape.target - shape.m) * k - shape.v * c) * dt;
+  shape.m += shape.v * dt;
+  draw(shape.m);
+  requestAnimationFrame(frame);
+}
+draw(0);
+requestAnimationFrame(frame);
+
+function restart(element, keyframes, timing) {
+  const style = getComputedStyle(element);
+  const from = { transform: style.transform === 'none' ? 'none' : style.transform, opacity: style.opacity };
+  element.getAnimations().forEach((animation) => animation.cancel());
+  return element.animate([from, ...keyframes], { fill: 'forwards', ...timing });
+}
+
+// Where each small mushroom leaves from: the centre of the cap's underside.
+function offsets(item) {
+  const fall = item.querySelector('.fall');
+  const box = trigger.getBoundingClientRect();
+  const row = item.getBoundingClientRect();
+  const x = row.left + fall.offsetLeft + fall.offsetWidth / 2;
+  const y = row.top + fall.offsetTop + fall.offsetHeight;
+  return { dx: box.left + box.width / 2 - x, dy: box.top + box.height * 0.75 - y };
+}
+
+const grow = calm ? { duration: 200, easing: 'ease-out' } : spring(240, 20);
+
+function dropItems() {
+  items.forEach((item, i) => {
+    const fall = item.querySelector('.fall');
+    const drop = item.querySelector('.drop');
+    const bar = item.querySelector('.bar');
+    const delay = 140 + i * 80;
+    if (calm) {
+      restart(fall, [{ transform: 'none', opacity: 1 }], { duration: 260, delay: i * 50, easing: 'ease-out' });
+      restart(bar, [{ transform: 'none', opacity: 1 }], { ...grow, delay: 80 + i * 50 });
+      return;
+    }
+    const { dx, dy } = offsets(item);
+    // Sideways drift eases out while the fall accelerates, so each one arcs down.
+    restart(fall, [
+      { transform: `translateX(${dx}px)`, opacity: 0, offset: 0 },
+      { opacity: 1, offset: 0.2 },
+      { transform: 'none', opacity: 1 },
+    ], { duration: 460 + i * 40, delay, easing: 'cubic-bezier(0.2, 0.7, 0.4, 1)' });
+    restart(drop, [
+      { transform: `translateY(${dy}px) scale(0.25)`, offset: 0, easing: 'cubic-bezier(0.5, 0, 0.9, 0.5)' },
+      { transform: 'none', offset: 0.68, easing: 'cubic-bezier(0.2, 0.6, 0.4, 1)' },
+      { transform: 'scale(1.2, 0.78)', offset: 0.8, easing: 'cubic-bezier(0.4, 0, 0.3, 1)' },
+      { transform: 'scale(0.96, 1.05)', offset: 0.9 },
+      { transform: 'none' },
+    ], { duration: 620 + i * 50, delay });
+    restart(bar, [{ transform: 'none', opacity: 1 }], { ...grow, delay: delay + 440 + i * 35 });
+  });
+}
+
+function liftItems() {
+  items.forEach((item, i) => {
+    const fall = item.querySelector('.fall');
+    const drop = item.querySelector('.drop');
+    const bar = item.querySelector('.bar');
+    const delay = (items.length - 1 - i) * 45;
+    restart(bar, [{ transform: 'scaleX(0)', opacity: 0 }], { duration: 160, delay, easing: 'cubic-bezier(0.5, 0, 0.8, 0.4)' });
+    if (calm) {
+      restart(fall, [{ opacity: 0 }], { duration: 200, delay, easing: 'ease-in' });
+      return;
+    }
+    const { dx, dy } = offsets(item);
+    // A quick crouch, then each one hops back up under the cap.
+    restart(drop, [
+      { transform: 'scale(1.14, 0.84)', offset: 0.25, easing: 'cubic-bezier(0.3, 0.6, 0.5, 1)' },
+      { transform: `translateY(${dy}px) scale(0.25)` },
+    ], { duration: 380, delay: delay + 90, easing: 'ease-in' });
+    restart(fall, [
+      { transform: 'none', opacity: 1, offset: 0.3 },
+      { opacity: 1, offset: 0.8 },
+      { transform: `translateX(${dx}px)`, opacity: 0 },
+    ], { duration: 380, delay: delay + 90, easing: 'cubic-bezier(0.5, 0, 0.7, 0.6)' });
+  });
+}
+
+function popSpots() {
+  spots.forEach((spot, i) => {
+    spot.getAnimations().forEach((animation) => animation.cancel());
+    if (calm) return;
+    spot.animate([{ transform: 'scale(0)' }, { transform: 'scale(1.25)', offset: 0.6 }, { transform: 'scale(1)' }],
+      { duration: 360, delay: 140 + i * 22, easing: 'cubic-bezier(0.3, 0, 0.3, 1)', fill: 'backwards' });
+  });
+}
+
+let open = false;
+function setOpen(next) {
+  if (next === open) return;
+  open = next;
+  trigger.setAttribute('aria-expanded', next);
+  list.inert = !next;
+  shape.target = next ? 1 : 0;
+  if (next) {
+    // Kick the spring backwards first: the button gathers itself before it unfurls.
+    if (!calm) shape.v -= 1.6;
+    popSpots();
+    dropItems();
+  } else {
+    hover(null);
+    hideSpots(160);
+    liftItems();
+  }
+}
+
+function hideSpots(duration) {
+  spots.forEach((spot) => {
+    spot.getAnimations().forEach((animation) => animation.cancel());
+    spot.animate([{ transform: 'scale(0)' }], { duration, fill: 'forwards', easing: 'ease-in' });
+  });
+}
+hideSpots(0);
+
+let hot = null;
+function hover(item) {
+  if (hot === item) return;
+  hot?.classList.remove('hot');
+  hot = item;
+  glow.classList.toggle('on', Boolean(item));
+  if (!item) return;
+  item.classList.add('hot');
+  const y = `${item.parentElement.offsetTop}px`;
+  if (glow.classList.contains('placed')) {
+    restart(glow, [{ transform: `translateY(${y})` }], calm ? { duration: 150 } : spring(320, 26));
+  } else {
+    glow.style.transform = `translateY(${y})`;
+    glow.classList.add('placed');
+  }
+  if (!calm) {
+    item.querySelector('.drop svg').animate(
+      [{ transform: 'none' }, { transform: 'rotate(-8deg)', offset: 0.3 }, { transform: 'rotate(4deg)', offset: 0.65 }, { transform: 'none' }],
+      { duration: 420, easing: 'ease-in-out' });
+  }
+}
+
+// Picking an item: its mushroom hops, then the menu folds back into the button.
+function choose(item) {
+  if (!calm) {
+    item.querySelector('.drop svg').animate([
+      { transform: 'none' },
+      { transform: 'scale(1.15, 0.85)', offset: 0.2 },
+      { transform: 'translateY(-35%) scale(0.92, 1.1)', offset: 0.55 },
+      { transform: 'none' },
+    ], { duration: 460, easing: 'ease-in-out' });
+  }
+  setTimeout(() => setOpen(false), 420);
+}
+
+function press() {
+  if (calm) return;
+  trigger.querySelector('svg').animate(
+    [{ transform: 'none' }, { transform: 'scale(0.93)', offset: 0.35 }, { transform: 'none' }],
+    { duration: 260, easing: 'ease-out' });
+}
+
+const IDLE_MS = 4000;
+let lastInput = -IDLE_MS;
+const touch = () => { lastInput = performance.now(); };
+
+trigger.addEventListener('pointerdown', press);
+trigger.addEventListener('click', (event) => {
+  touch();
+  if (event.detail === 0) press();
+  setOpen(!open);
+});
+items.forEach((item) => {
+  item.addEventListener('pointerenter', () => { touch(); hover(item); });
+  item.addEventListener('focus', () => hover(item));
+  item.addEventListener('click', () => { touch(); choose(item); });
+});
+list.addEventListener('pointerleave', () => hover(null));
+addEventListener('pointermove', touch);
+addEventListener('keydown', (event) => {
+  touch();
+  if (event.key === 'Escape' && open) {
+    setOpen(false);
+    trigger.focus();
+    return;
+  }
+  const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
+  if (!step) return;
+  event.preventDefault();
+  if (!open) setOpen(true);
+  const at = items.indexOf(document.activeElement);
+  items[(at + step + items.length) % items.length].focus();
+});
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const idle = () => performance.now() - lastInput > IDLE_MS;
+
+async function demo() {
+  await wait(800);
+  for (let round = 0; ; round++) {
+    await wait(open ? 300 : 1300);
+    if (!idle()) continue;
+    press();
+    await wait(90);
+    setOpen(true);
+    await wait(1300);
+    const pick = 1 + (round % 3);
+    for (let i = 0; i <= pick && idle(); i++) {
+      hover(items[i]);
+      await wait(380);
+    }
+    if (!idle()) continue;
+    await wait(300);
+    choose(items[pick]);
+    await wait(1100);
+  }
+}
+demo();
+</script>
+</body>
+</html>

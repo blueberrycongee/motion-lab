@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Carousel</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: radial-gradient(90% 75% at 50% 42%, #4f6468, #26363a 70%, #182226);
+    perspective: calc(4 * var(--u));
+    perspective-origin: 50% 40%;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+  }
+  body.dragging { cursor: grabbing; }
+  .world { position: absolute; left: 50%; top: 50%; transform-style: preserve-3d; }
+  .world div, .world i { position: absolute; display: block; transform-style: preserve-3d; }
+  .world svg { display: block; width: 100%; height: 100%; }
+
+  .floor {
+    width: calc(9 * var(--u)); height: calc(9 * var(--u));
+    left: calc(-4.5 * var(--u)); top: calc(-4.5 * var(--u));
+    background: radial-gradient(closest-side, rgb(118 140 136 / 0.55), rgb(80 100 100 / 0.2) 55%, transparent);
+  }
+  .shadow {
+    width: calc(0.7 * var(--u)); height: calc(0.1 * var(--u));
+    left: calc(-0.35 * var(--u)); top: calc(-0.05 * var(--u));
+    border-radius: 50%;
+    background: rgb(10 18 20 / 0.55);
+    filter: blur(calc(0.03 * var(--u)));
+  }
+  /* Cards hang by a thread from a pivot far above, so they swing as the ring turns. */
+  .hanger { transform-origin: 0 calc(-2.5 * var(--u)); }
+  .thread {
+    left: calc(-0.0015 * var(--u)); top: calc(-2.5 * var(--u));
+    width: max(1px, calc(0.003 * var(--u))); height: calc(2.06 * var(--u));
+    background: linear-gradient(transparent, rgb(236 226 204 / 0.55) 40%);
+  }
+  .card { left: calc(-0.4 * var(--u)); top: calc(-0.5 * var(--u)); width: calc(0.8 * var(--u)); height: var(--u); }
+  .face {
+    inset: 0;
+    border-radius: calc(0.018 * var(--u));
+    overflow: hidden;
+    backface-visibility: hidden;
+    transform: translateZ(calc(0.006 * var(--u)));
+  }
+  .face::after { content: ''; position: absolute; inset: 0; background: var(--light, none); }
+  .front { background: #f1ebdf; }
+  .world .back { transform: rotateY(180deg) translateZ(calc(0.006 * var(--u))); background: #2f4a3d; }
+  .edge { background: #d8cfbd; }
+  .side { top: calc(0.018 * var(--u)); width: calc(0.012 * var(--u)); height: calc(0.964 * var(--u)); transform-origin: 0 50%; }
+  .top { left: calc(0.018 * var(--u)); width: calc(0.764 * var(--u)); height: calc(0.012 * var(--u)); transform-origin: 50% 0; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position: absolute">
+  <defs>
+    <radialGradient id="cap" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6e130b"/>
+      <stop offset="1" stop-color="#b8321a"/>
+    </radialGradient>
+    <radialGradient id="cap-top" r="0.5">
+      <stop offset="0" stop-color="#6e130b"/>
+      <stop offset="1" stop-color="#b8321a"/>
+    </radialGradient>
+    <radialGradient id="veil" cx="0.38" cy="0.3" r="0.75">
+      <stop offset="0" stop-color="#fbf8f0"/><stop offset="0.7" stop-color="#e6dcc6"/><stop offset="1" stop-color="#cfc2a6"/>
+    </radialGradient>
+    <radialGradient id="print">
+      <stop offset="0.12" stop-color="#2a2826"/>
+      <stop offset="0.2" stop-color="#f2eee4" stop-opacity="0.9"/>
+      <stop offset="0.8" stop-color="#f2eee4" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#f2eee4" stop-opacity="0"/>
+    </radialGradient>
+    <path id="stem" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+    <path id="ring" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+    <path id="gills" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+    <path id="cap-shape" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+    <g id="spots">
+      <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+      <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+      <ellipse cx="-188" cy="-1030" rx="28" ry="22"/>
+      <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+      <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+      <ellipse cx="92" cy="-990" rx="34" ry="27"/>
+      <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+      <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+      <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+      <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+      <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+      <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+      <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+      <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+    </g>
+    <g id="mushroom">
+      <use href="#stem" fill="#e8e2d2"/>
+      <use href="#ring" fill="#ddd5c2"/>
+      <use href="#gills" fill="#d2c6ad"/>
+      <use href="#cap-shape" fill="url(#cap)"/>
+      <use href="#spots" fill="#efe7d6"/>
+    </g>
+  </defs>
+</svg>
+<div class="world"><div class="floor"></div><div class="ring"></div></div>
+<script type="module">
+const CARD_W = 0.8;
+const COUNT = 10;
+const STEP = (2 * Math.PI) / COUNT;
+const RADIUS = (COUNT * CARD_W * 1.2) / (2 * Math.PI);
+const FLOOR = 0.66;
+const FRICTION = 2.1;
+const PERIOD = 4.4;
+const WIND_UP = 0.4, PUSH = 0.22;
+// Turns taken by the idle hand, in cards; varied so the ring never feels metronomic.
+const THROWS = [1, 2, 1, 3, -1, 2, -2, 1];
+const LIGHT = normalize([-0.4, -0.45, 0.8]);
+const HALFWAY = normalize([LIGHT[0], LIGHT[1], LIGHT[2] + 1]);
+const INK = '#3b2f28';
+
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const world = document.querySelector('.world');
+const floor = document.querySelector('.floor');
+const ring = document.querySelector('.ring');
+const clamp = (x, lo, hi) => Math.min(Math.max(x, lo), hi);
+const clamp01 = (x) => clamp(x, 0, 1);
+const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - (2 - 2 * x) ** 3 / 2);
+
+function normalize(v) {
+  const l = Math.hypot(...v);
+  return v.map((c) => c / l);
+}
+
+// ---- Specimen plates, drawn in an 800 x 1000 card with the canonical unit at 1000 ----
+
+const ground = (y = 0) => `<path d="M-300 ${y} Q-120 ${y - 18} 40 ${y - 4} T320 ${y}" fill="none" stroke="${INK}" stroke-width="7" stroke-linecap="round" opacity="0.6"/>`;
+
+// Warts spread evenly over the upper half of a dome.
+function warts(cx, cy, rx, ry, count, size) {
+  let html = '';
+  for (let i = 0; i < count; i++) {
+    const a = Math.PI * (0.06 + 0.88 * ((i * 0.618034) % 1));
+    const r = 0.88 * Math.sqrt((i + 0.5) / count);
+    const scale = 1 - 0.35 * r;
+    html += `<ellipse cx="${(cx + Math.cos(a) * rx * r).toFixed(0)}" cy="${(cy - Math.sin(a) * ry * r).toFixed(0)}" rx="${(size * scale).toFixed(0)}" ry="${(size * scale * 0.8).toFixed(0)}"/>`;
+  }
+  return `<g fill="#efe7d6">${html}</g>`;
+}
+
+const PLATES = [
+  // Egg: the universal veil just splitting over the cap.
+  () => `${ground()}<g transform="scale(1.45)">
+    <path d="M-170 0 C-230 -160 -190 -420 0 -450 C190 -420 230 -160 170 0 Z" fill="url(#veil)"/>
+    <path d="M-120 -330 A140 110 0 0 1 120 -330 L90 -345 L60 -315 L20 -350 L-20 -318 L-60 -350 L-95 -318 Z" fill="url(#cap-top)"/></g>`,
+  // Button: a closed cap carpeted in veil remnants.
+  () => `${ground()}<g transform="scale(1.3)"><path d="M-120 0 Q-150 -60 -80 -90 L80 -90 Q150 -60 120 0 Z" fill="#efe9dc"/>
+    <use href="#stem" fill="#e8e2d2" transform="scale(0.85 0.32)"/>
+    <ellipse cx="0" cy="-330" rx="250" ry="230" fill="url(#cap-top)"/>${warts(0, -300, 240, 260, 18, 30)}</g>`,
+  // Young: the cap still cupped around the gills.
+  () => `${ground()}<use href="#stem" fill="#e8e2d2" transform="scale(0.95 0.7)"/>
+    <path d="M-350 -560 A350 300 0 1 1 350 -560 Q0 -520 -350 -560 Z" fill="url(#cap-top)"/>${warts(0, -560, 340, 320, 16, 28)}`,
+  // Mature: the canonical profile.
+  () => `${ground()}<use href="#mushroom"/>`,
+  // Old: flattened and upturned, warts washed away.
+  () => `${ground()}<use href="#stem" fill="#e4dccb" transform="scale(1 0.98)"/><use href="#ring" fill="#d6cdb8"/>
+    <path d="M-560 -790 Q-300 -960 30 -975 Q360 -960 610 -800 Q590 -840 520 -830 Q30 -880 -480 -830 Q-540 -830 -560 -790 Z" fill="#a8341f"/>
+    <path d="M-480 -830 Q30 -880 520 -830 L500 -812 Q30 -852 -460 -812 Z" fill="#d2c6ad"/>
+    ${warts(30, -845, 480, 120, 7, 16)}`,
+  // Section: cut through the middle to the white flesh.
+  () => `${ground()}<use href="#stem" fill="#f6f1e6" stroke="#ddd3bd" stroke-width="10"/>
+    <use href="#ring" fill="#e8e0cc"/>
+    <use href="#cap-shape" fill="#f4eee0" stroke="#b8321a" stroke-width="26"/>
+    <g stroke="#cfc2a6" stroke-width="5">${Array.from({ length: 21 }, (_, i) => `<line x1="${-480 + i * 50}" y1="-806" x2="${-470 + i * 50}" y2="-842"/>`).join('')}</g>
+    <path d="M-10 -860 Q30 -900 75 -860" fill="none" stroke="#e5dccb" stroke-width="10"/>`,
+  // Underside: gills radiating from the stem.
+  () => `<g transform="translate(30 -520)"><circle r="470" fill="#b8321a"/><circle r="440" fill="#d8ccb2"/>
+    <g stroke="#b9ab8d" stroke-width="5">${Array.from({ length: 72 }, (_, i) => {
+      const a = (i / 72) * 2 * Math.PI, inner = i % 2 ? 210 : 140;
+      return `<line x1="${(Math.cos(a) * inner).toFixed(0)}" y1="${(Math.sin(a) * inner).toFixed(0)}" x2="${(Math.cos(a) * 435).toFixed(0)}" y2="${(Math.sin(a) * 435).toFixed(0)}"/>`;
+    }).join('')}</g>
+    <circle r="135" fill="#e6dfcf" stroke="#cfc4ad" stroke-width="10"/><circle r="85" fill="#f3eee2"/></g>`,
+  // Crown: looking straight down on the cap.
+  () => `<g transform="translate(30 -520)"><circle r="470" fill="url(#cap-top)"/>
+    <g fill="#efe7d6">${Array.from({ length: 34 }, (_, i) => {
+      const a = i * 2.39996, r = 420 * Math.sqrt((i + 0.6) / 34);
+      return `<ellipse cx="${(Math.cos(a) * r).toFixed(0)}" cy="${(Math.sin(a) * r).toFixed(0)}" rx="${(34 - r * 0.04).toFixed(0)}" ry="${(28 - r * 0.035).toFixed(0)}"/>`;
+    }).join('')}</g></g>`,
+  // Spore print: white spores dropped from the gills onto dark paper.
+  () => `<rect x="-560" y="-1290" width="1120" height="1300" fill="#2a2826"/>
+    <g transform="translate(0 -540)"><circle r="400" fill="url(#print)"/>
+    <g stroke="#2a2826" stroke-width="7" opacity="0.55">${Array.from({ length: 60 }, (_, i) => {
+      const a = (i / 60) * 2 * Math.PI;
+      return `<line x1="${(Math.cos(a) * 90).toFixed(0)}" y1="${(Math.sin(a) * 90).toFixed(0)}" x2="${(Math.cos(a) * 395).toFixed(0)}" y2="${(Math.sin(a) * 395).toFixed(0)}"/>`;
+    }).join('')}</g></g>`,
+  // Family: three ages from one patch of ground.
+  () => `${ground()}<use href="#mushroom" transform="translate(110 0) scale(0.7)"/>
+    <use href="#mushroom" transform="translate(-150 0) scale(-0.42 0.42)"/>
+    <ellipse cx="-50" cy="-60" rx="60" ry="55" fill="url(#cap-top)"/>${warts(-50, -60, 55, 55, 5, 13)}`,
+];
+
+const BACK = `<svg viewBox="-400 -500 800 1000">
+  <defs><pattern id="weave" width="40" height="40" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+    <path d="M0 20 H40 M20 0 V40" stroke="#3a5a4a" stroke-width="3"/></pattern></defs>
+  <rect x="-400" y="-500" width="800" height="1000" fill="url(#weave)"/>
+  <rect x="-355" y="-455" width="710" height="910" rx="14" fill="none" stroke="#c9b98f" stroke-width="5"/>
+  <circle r="150" fill="#2f4a3d" stroke="#c9b98f" stroke-width="5"/>
+  <use href="#mushroom" transform="translate(-6 95) scale(0.2)" opacity="0.9"/></svg>`;
+
+function plate(draw) {
+  return `<svg viewBox="-400 -1060 800 1000">
+    <rect x="-370" y="-1030" width="740" height="940" rx="8" fill="none" stroke="#bdb197" stroke-width="4"/>
+    <g transform="translate(0 -190) scale(0.62)">${draw()}</g>
+    <circle cy="-990" r="16" fill="#d9cfb9" stroke="#b5a98f" stroke-width="5"/><circle cy="-990" r="6" fill="#4b4237"/></svg>`;
+}
+
+// ---- Cards ----
+
+function buildCard(index) {
+  const slot = document.createElement('div');
+  slot.style.transform = `rotateY(${index * STEP}rad) translateZ(calc(${RADIUS} * var(--u)))`;
+  slot.innerHTML = `<div class="shadow"></div><div class="hanger"><i class="thread"></i><div class="card">
+    <div class="face front">${plate(PLATES[index])}</div>
+    <div class="face back">${BACK}</div>
+    <i class="edge side" style="transform: translateZ(calc(0.006 * var(--u))) rotateY(90deg)"></i>
+    <i class="edge side" style="left: calc(0.8 * var(--u)); transform: translateZ(calc(0.006 * var(--u))) rotateY(90deg)"></i>
+    <i class="edge top" style="transform: translateZ(calc(0.006 * var(--u))) rotateX(-90deg)"></i></div></div>`;
+  ring.append(slot);
+  return {
+    hanger: slot.querySelector('.hanger'),
+    shadow: slot.querySelector('.shadow'),
+    front: slot.querySelector('.front'),
+    back: slot.querySelector('.back'),
+    // Each card hangs on a slightly different length of thread, so they swing out of step.
+    frequency: 0.78 + 0.09 * ((index * 7) % 4),
+    swing: [0, 0],
+    swingVelocity: [0, 0],
+  };
+}
+
+const cards = Array.from({ length: COUNT }, (_, i) => buildCard(i));
+
+// Diffuse falloff plus a narrow glossy band that slides across as the card turns.
+function lighting(yaw, swing) {
+  const normal = [Math.sin(yaw) * Math.cos(swing), Math.sin(swing), Math.cos(yaw) * Math.cos(swing)];
+  const facing = normal[0] * LIGHT[0] + normal[1] * LIGHT[1] + normal[2] * LIGHT[2];
+  const gloss = Math.max(normal[0] * HALFWAY[0] + normal[1] * HALFWAY[1] + normal[2] * HALFWAY[2], 0) ** 30;
+  const dark = clamp(0.62 * (1 - facing / 0.85), 0, 0.7);
+  const band = 50 + Math.sin(yaw) * 140;
+  return `linear-gradient(105deg, transparent ${band - 22}%, rgb(255 251 240 / ${(gloss * 0.45).toFixed(3)}) ${band}%, transparent ${band + 22}%),
+    linear-gradient(rgb(255 250 235 / ${(Math.max(facing - 0.85, 0) * 0.6).toFixed(3)}), rgb(16 24 28 / ${dark.toFixed(3)}))`;
+}
+
+// ---- Ring motion: a hand flicks it, friction lets it coast onto the next card ----
+
+let unit = 1;
+let angle = 0, velocity = 0, smoothedAccel = 0;
+let dragging = false, dragX = 0, dragTime = 0, dragVelocity = 0, lastInput = -1e9;
+let autoBase = 0, lastThrow = -1, windFrom = 0, aim = 0, throwVelocity = 0;
+
+const nearestCard = (a) => Math.round(a / STEP) * STEP;
+
+function release(now) {
+  aim = nearestCard(angle + velocity / FRICTION);
+  velocity = FRICTION * (aim - angle);
+  lastInput = now;
+}
+
+function idleHand(now, dt) {
+  const t = (now - autoBase) / 1000;
+  const index = Math.floor(t / PERIOD);
+  const phase = t - index * PERIOD;
+  if (index !== lastThrow) {
+    lastThrow = index;
+    windFrom = nearestCard(angle);
+    const turn = calm ? 1 : THROWS[index % THROWS.length];
+    aim = windFrom - turn * STEP;
+    throwVelocity = FRICTION * (aim - windFrom);
+  }
+  const direction = Math.sign(aim - windFrom);
+  if (phase < WIND_UP && !calm) {
+    // Anticipation: the hand draws the ring back a little before the flick.
+    angle = windFrom - direction * 0.05 * Math.sin((Math.PI / 2) * ease(phase / WIND_UP));
+    velocity = 0;
+    return;
+  }
+  const push = clamp01((phase - (calm ? 0 : WIND_UP)) / PUSH);
+  if (push < 1) velocity = throwVelocity * (calm ? 0.5 : 1) * ease(push);
+  else if (Math.abs(aim - angle) > 1e-4) velocity = FRICTION * (aim - angle);
+  angle += velocity * dt;
+}
+
+function coast(dt) {
+  angle += velocity * dt;
+  velocity = FRICTION * (aim - angle);
+}
+
+addEventListener('pointerdown', (event) => {
+  dragging = true;
+  dragX = event.clientX;
+  dragTime = event.timeStamp;
+  dragVelocity = 0;
+  document.body.classList.add('dragging');
+  document.body.setPointerCapture(event.pointerId);
+});
+addEventListener('pointermove', (event) => {
+  if (!dragging) return;
+  const delta = (event.clientX - dragX) / (RADIUS * unit);
+  const elapsed = Math.max(event.timeStamp - dragTime, 8) / 1000;
+  dragX = event.clientX;
+  dragTime = event.timeStamp;
+  angle += delta;
+  dragVelocity = dragVelocity * 0.6 + (delta / elapsed) * 0.4;
+  lastInput = performance.now();
+});
+addEventListener('pointerup', (event) => {
+  if (!dragging) return;
+  dragging = false;
+  document.body.classList.remove('dragging');
+  velocity = dragVelocity;
+  release(event.timeStamp);
+});
+
+// Pendulum response: thread swing lags the ring's acceleration and flares out with speed.
+function swingCards(dt) {
+  const tangential = clamp(-smoothedAccel * RADIUS * 0.05, -0.16, 0.16);
+  const radial = clamp(velocity * velocity * RADIUS * 0.02, 0, 0.12);
+  for (const card of cards) {
+    const stiffness = (2 * Math.PI * card.frequency) ** 2;
+    const damping = 2 * 0.16 * 2 * Math.PI * card.frequency;
+    [tangential, radial].forEach((target, k) => {
+      const accel = stiffness * ((calm ? target * 0.3 : target) - card.swing[k]) - damping * card.swingVelocity[k];
+      card.swingVelocity[k] += accel * dt;
+      card.swing[k] += card.swingVelocity[k] * dt;
+    });
+  }
+}
+
+function poseCards() {
+  cards.forEach((card, i) => {
+    const [tilt, flare] = card.swing;
+    card.hanger.style.transform = `rotateX(${flare}rad) rotateZ(${tilt}rad)`;
+    const yaw = i * STEP + angle;
+    card.front.style.setProperty('--light', lighting(yaw, -flare));
+    card.back.style.setProperty('--light', lighting(yaw + Math.PI, flare));
+    const reach = 2.5 * unit;
+    card.shadow.style.transform = `translate3d(${(-tilt * reach + 0.05 * unit).toFixed(1)}px, ${FLOOR * unit}px, ${(flare * reach + 0.12 * unit).toFixed(1)}px) rotateX(90deg)`;
+  });
+}
+
+function resize() {
+  unit = Math.min(innerHeight * 0.84, innerWidth * 0.98);
+  document.body.style.setProperty('--u', `${unit}px`);
+  floor.style.transform = `translateY(${FLOOR * unit}px) rotateX(90deg)`;
+}
+addEventListener('resize', resize);
+resize();
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  const before = velocity;
+  if (dragging) {
+    // A held, motionless pointer should not fling the ring on release.
+    dragVelocity *= Math.exp(-6 * dt);
+    velocity = dragVelocity;
+  }
+  else if (now - lastInput < 3000) coast(dt);
+  else {
+    if (lastInput > 0 && autoBase < lastInput) {
+      autoBase = now;
+      lastThrow = -1;
+    }
+    idleHand(now, dt);
+  }
+  if (dt > 0) smoothedAccel += ((velocity - before) / dt - smoothedAccel) * Math.min(dt * 12, 1);
+  swingCards(dt);
+  poseCards();
+  ring.style.transform = `rotateY(${angle}rad)`;
+  const tilt = -0.1 + (calm ? 0 : 0.015 * Math.sin(now / 2600));
+  world.style.transform = `translate3d(0, ${0.04 * unit}px, ${-(RADIUS + 1.1) * unit}px) rotateX(${tilt}rad)`;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

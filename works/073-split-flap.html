@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Split-Flap</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    display: grid; place-items: center;
+    background: linear-gradient(#d3cbbb, #bdb4a2);
+  }
+  .board {
+    --m: min(calc(88vh / var(--rows)), calc(92vw / var(--cols) / 0.8));
+    display: grid; grid-template-columns: repeat(var(--cols), calc(var(--m) * 0.8)); grid-auto-rows: var(--m);
+    padding: calc(var(--m) * 0.5); border-radius: calc(var(--m) * 0.25);
+    background: #121211;
+    box-shadow: 0 0 0 calc(var(--m) * 0.12) #2b2a28, 0 calc(var(--m) * 0.4) calc(var(--m) * 1.2) #4a433855;
+  }
+  /* A module shows the next colour above the hinge and the current one below it. */
+  .module {
+    position: relative; margin: calc(var(--m) * 0.04) calc(var(--m) * 0.035);
+    border-radius: calc(var(--m) * 0.05);
+    background: linear-gradient(var(--top) 50%, var(--bottom) 50%);
+  }
+  /* The hinge gap, with the lower flap a touch darker under the upper one's lip. */
+  .module::after {
+    content: ''; position: absolute; inset: 0; border-radius: inherit;
+    background: linear-gradient(#ffffff0c 0 46%, #000a 48% 52%, #0003 52% 58%, #0000 66%);
+  }
+  .flap {
+    position: absolute; left: 0; right: 0; top: 0; height: 50%;
+    border-radius: calc(var(--m) * 0.05) calc(var(--m) * 0.05) 0 0;
+    transform-origin: 50% 100%; transform: scaleY(0);
+  }
+</style>
+</head>
+<body>
+<div class="board"></div>
+<script type="module">
+const COLS = 26, ROWS = 23;
+const CELL_W = 0.05, CELL_H = 0.0625;   // mushroom units per module
+// The colours on each module's drum, in the order the flaps fall.
+const DRUM = ['161615', '4f4c34', '6e130b', '9a2513', 'c63d1e', 'f4eee0', 'ddd5c3', 'b9ad94', '7d705a'];
+const [BLACK, GROUND, CROWN, MID, RIM, WART, STEM, SHADE, GILLS] = DRUM.keys();
+const SEGMENT = 5;
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// The canonical profile, sampled in mushroom units: y up, ground at 0, cap about 1.12 wide.
+const SPOTS = [
+  [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+  [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+  [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+  [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+];
+
+function ellipse(px, py, rx, ry) {
+  const k0 = Math.hypot(px / rx, py / ry);
+  const k1 = Math.hypot(px / (rx * rx), py / (ry * ry));
+  return k0 * (k0 - 1) / k1;
+}
+
+// The drum colour of the mushroom at (x0, y), or null off the mushroom. `cellH` is the module
+// height in the same units, so thin parts can claim a whole row whatever the pose's scale.
+function colorAt(x0, y, cellH = CELL_H) {
+  const x = x0 - 0.05 * y * y;
+  const r = Math.abs(x);
+  const under = 0.82 + 0.02 * (1 - Math.min(r * r / 0.3125, 1));
+  if (Math.max(ellipse(x, y - 0.8, 0.56, 0.31), under - y) < 0) {
+    // Warts are smaller than a module, so they are sampled generously.
+    if (SPOTS.some(([sx, sy, sr]) => ((x0 - 0.032 - sx) / sr) ** 2 + ((y - sy) / (sr * 0.8)) ** 2 < 2.6)) return WART;
+    const axis = 0.56 * Math.sqrt(Math.max(0, 1 - ((y - 0.8) / 0.31) ** 2));
+    return axis < 0.3 ? CROWN : axis < 0.45 ? MID : RIM;
+  }
+  // The gills and the ring are thinner than a module, so each is given one full row.
+  if (Math.max(r - 0.55, y - under, under - cellH - y) < 0) return GILLS;
+  if (Math.max(r - 0.114 - cellH * 0.5, Math.abs(y - 0.63) - cellH * 0.5) < 0) return WART;
+  const stemR = 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  if (Math.max(r - stemR, Math.abs(y - 0.43) - 0.43) < 0) {
+    // The skirt casts a shadow on the stem just below it.
+    return x > 0.05 || Math.abs(y - 0.63 + cellH) < cellH * 0.5 ? SHADE : STEM;
+  }
+  return null;
+}
+
+const ground = (y) => (Math.abs(y + CELL_H * 0.5) < CELL_H * 0.5 ? GROUND : BLACK);
+const random = (a, b) => a + Math.random() * (b - a);
+const SPORES = Array.from({ length: 11 }, () => [random(-0.42, 0.5), random(0.05, 0.62)]);
+
+// The poses, each a picture over the board, played in order and looped.
+const POSES = [
+  // A button, the young mushroom.
+  (x, y) => colorAt(x / 0.62, y / 0.62, CELL_H / 0.62) ?? ground(y),
+  (x, y) => colorAt(x, y) ?? ground(y),
+  // The cap opens out flat and wide as it matures.
+  (x, y) => (y > 0.74 ? colorAt(x / 1.12, 0.8 + (y - 0.8) / 0.62, CELL_H / 0.62) : colorAt(x, y)) ?? ground(y),
+  (x, y) => colorAt(x, y) ?? spore(x, y, 0) ?? ground(y),
+  (x, y) => colorAt(x, y) ?? spore(x, y, 0.28) ?? ground(y),
+];
+
+function spore(x, y, fall) {
+  const hit = SPORES.some(([sx, sy]) => sy - fall > 0.02 && Math.abs(x - sx) < CELL_W / 2 && Math.abs(y - sy + fall) < CELL_H / 2);
+  return hit ? WART : null;
+}
+
+function mix(hex, k) {
+  const c = hex.match(/\w\w/g).map((h) => Math.round(parseInt(h, 16) * k));
+  return `rgb(${c.join()})`;
+}
+
+const board = document.querySelector('.board');
+board.style.setProperty('--cols', COLS);
+board.style.setProperty('--rows', ROWS);
+const modules = [];
+for (let row = 0; row < ROWS; row++) {
+  for (let col = 0; col < COLS; col++) {
+    const x = (col + 0.5 - COLS / 2) * CELL_W + 0.03;
+    const y = (ROWS - row - 2.5) * CELL_H;
+    const el = document.createElement('div');
+    el.className = 'module';
+    el.innerHTML = '<div class="flap"></div>';
+    board.append(el);
+    modules.push({
+      el, flap: el.firstChild,
+      colors: POSES.map((pose) => pose(x, y)),
+      // The board writes row by row, left to right, with each module's own small lag.
+      delay: 0.055 * row + 0.014 * col + random(0, 0.15),
+      flapTime: random(0.062, 0.084) * (calm ? 3 : 1),
+    });
+  }
+}
+
+// Where a module's flaps are at time `tau` into a change from colour `a` to `b`:
+// the colours showing, and the falling flap's angle in degrees (null when at rest).
+function flipState(module, a, b, tau) {
+  const steps = calm ? (a === b ? 0 : 1) : (b - a + DRUM.length) % DRUM.length;
+  const next = (k) => (calm ? b : (a + k + 1) % DRUM.length);
+  const current = (k) => (calm ? a : (a + k) % DRUM.length);
+  if (steps === 0 || tau < 0) return { top: a, bottom: a, angle: null };
+  const k = Math.floor(tau / module.flapTime);
+  if (k < steps) {
+    // Released at the top, the flap falls under gravity until it strikes the stop.
+    const u = tau / module.flapTime - k;
+    return { top: next(k), bottom: current(k), from: current(k), to: next(k), angle: 180 * u ** 1.6 };
+  }
+  // The last flap bounces off the stop once before it lies still.
+  const since = tau - steps * module.flapTime;
+  if (since < 0.16 && !calm) {
+    return { top: b, bottom: b, from: b, to: b, angle: 180 - 24 * Math.exp(-14 * since) * Math.abs(Math.sin(since * 40)) };
+  }
+  return { top: b, bottom: b, angle: null };
+}
+
+function draw(module, state) {
+  const key = `${state.top} ${state.bottom} ${state.angle?.toFixed(1)}`;
+  if (key === module.key) return;
+  module.key = key;
+  module.el.style.setProperty('--top', `#${DRUM[state.top]}`);
+  module.el.style.setProperty('--bottom', `#${DRUM[state.bottom]}`);
+  if (state.angle === null) {
+    module.flap.style.transform = 'scaleY(0)';
+    return;
+  }
+  // The front of the flap tips away from the light as it falls; its back comes up out of shadow.
+  const cos = Math.cos(state.angle * Math.PI / 180);
+  const front = state.angle < 90;
+  const light = front ? 0.55 + 0.45 * cos : 0.62 + 0.38 * -cos;
+  module.flap.style.transform = `scaleY(${cos.toFixed(3)})`;
+  module.flap.style.background = mix(DRUM[front ? state.from : state.to], light);
+}
+
+function frame(ms) {
+  const t = ms / 1000;
+  const index = Math.floor(t / SEGMENT);
+  const pose = index % POSES.length;
+  const previous = (pose + POSES.length - 1) % POSES.length;
+  const tau = t - index * SEGMENT;
+  for (const module of modules) {
+    draw(module, flipState(module, module.colors[previous], module.colors[pose], tau - module.delay));
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

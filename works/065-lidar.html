@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lidar</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #c9ccc8; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2', { antialias: true });
+if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('EXT_color_buffer_float is required');
+
+// Three tripod stations around the specimen, each scanning a regular grid of
+// azimuth and elevation like a terrestrial laser scanner.
+const SCAN = { stations: 3, columns: 512, rows: 256 };
+const SWEEP = { period: 8, travel: 6, reach: 1.45 };
+const LENS = 1.75;
+
+const quadVertex = `#version 300 es
+layout(location = 0) in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const scanFragment = `#version 300 es
+precision highp float;
+out vec4 outPoint;
+
+const vec3 BOUNDS_CENTER = vec3(0.0, 0.56, 0.0);
+const float BOUNDS_RADIUS = 0.82;
+const float GROUND_RADIUS = 1.3;
+const int COLUMNS = ${SCAN.columns};
+const int ROWS = ${SCAN.rows};
+
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(vec3(i, 0.0)), hash(vec3(i + vec2(1, 0), 0.0)), f.x),
+             mix(hash(vec3(i + vec2(0, 1), 0.0)), hash(vec3(i + vec2(1, 1), 0.0)), f.x), f.y);
+}
+
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom: ground at y = 0, cap top near y = 1.11, cap about 1.12 wide.
+// Returns distance and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom(vec3 p) {
+  p.x -= 0.05 * p.y * p.y;                       // a slight lean
+  float r = length(p.xz);
+
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43) * 0.8;
+
+  float frill = 0.008 * sin(atan(p.z, p.x) * 9.0);
+  float skirt = abs(r - (0.096 + (0.66 - p.y) * 0.32 + frill * smoothstep(0.64, 0.56, p.y))) - 0.009;
+  float ring = max(skirt, abs(p.y - 0.605) - 0.05) * 0.7;
+
+  vec3 c = p - vec3(0.0, 0.8, 0.0);
+  float dome = sdEllipsoid(c, vec3(0.56, 0.31, 0.56));
+  dome += 0.008 * sin(c.x * 11.0 + 1.3) * sin(c.z * 9.0) * sin(c.y * 7.0 + c.x * 5.0);
+  float under = 0.82 + 0.08 * (1.0 - min(r * r / 0.31, 1.0));
+  float cap = max(dome, under - p.y);
+  float gills = max(dome + 0.02, max(p.y - under - 0.004, under - 0.04 - p.y));
+
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  float body = smin(stem, max(cap, gills), 0.03);
+  if (body < res.x - 0.001) res = vec2(body, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+
+// Forest floor: gentle undulation, a scatter of pebbles and one fallen twig.
+float ground(vec3 p) {
+  float h = 0.03 * noise(p.xz * 2.2) + 0.012 * noise(p.xz * 9.0) - 0.02;
+  float d = p.y - h;
+  for (int i = 0; i < 7; i++) {
+    float a = float(i) * 2.4 + 0.6;
+    vec2 c = vec2(cos(a), sin(a)) * (0.4 + 0.12 * float(i));
+    float size = 0.035 + 0.03 * hash(vec3(float(i), 2.0, 5.0));
+    d = min(d, sdEllipsoid(p - vec3(c.x, 0.0, c.y), vec3(size * 1.3, size * 0.7, size)));
+  }
+  vec3 a = vec3(-0.95, 0.02, 0.25), b = vec3(-0.3, 0.025, 0.8);
+  vec3 pa = p - a, ba = b - a;
+  float twig = length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0)) - 0.02;
+  return min(d, twig);
+}
+
+vec2 scene(vec3 p) {
+  vec2 m = mushroom(p);
+  float g = ground(p);
+  return g < m.x ? vec2(g, 4.0) : m;
+}
+
+vec3 normalAt(vec3 p) {
+  vec2 e = vec2(0.002, 0.0);
+  return normalize(vec3(scene(p + e.xyy).x - scene(p - e.xyy).x,
+                        scene(p + e.yxy).x - scene(p - e.yxy).x,
+                        scene(p + e.yyx).x - scene(p - e.yyx).x));
+}
+
+// Near-infrared reflectance of each material, before range and incidence losses.
+float reflectance(vec3 p, float part) {
+  if (part < 0.5) return 0.55 + 0.35 * step(0.7, noise(p.xz * 26.0 + p.y * 9.0));
+  if (part < 1.5) return 0.5;
+  if (part < 3.5) return 0.8;
+  return 0.25 + 0.3 * noise(p.xz * 14.0);
+}
+
+void main() {
+  ivec2 cell = ivec2(gl_FragCoord.xy);
+  int station = cell.x / COLUMNS;
+  float u = (float(cell.x % COLUMNS) + 0.5) / float(COLUMNS);
+  float v = (float(cell.y) + 0.5) / float(ROWS);
+
+  float heading = float(station) * 2.0944 + 0.4;
+  vec3 origin = vec3(sin(heading) * 1.9, 1.35, cos(heading) * 1.9);
+  float azimuth = heading + 3.14159 + (u - 0.5) * radians(100.0);
+  float elevation = mix(radians(-60.0), radians(12.0), v);
+  vec3 dir = vec3(cos(elevation) * sin(azimuth), sin(elevation), cos(elevation) * cos(azimuth));
+
+  float t = 0.05;
+  vec2 hit = vec2(1e9, -1.0);
+  for (int i = 0; i < 100; i++) {
+    vec2 s = scene(origin + dir * t);
+    if (s.x < 0.0008) { hit = vec2(t, s.y); break; }
+    t += s.x * 0.85;
+    if (t > 4.0) break;
+  }
+  vec3 p = origin + dir * hit.x;
+  if (hit.y < 0.0 || length(p.xz) > GROUND_RADIUS) {
+    outPoint = vec4(0.0, 0.0, 0.0, -1.0);
+    return;
+  }
+  vec3 n = normalAt(p);
+  float incidence = abs(dot(n, dir));
+  float intensity = reflectance(p, hit.y) * (0.35 + 0.65 * incidence) / (1.0 + 0.15 * hit.x * hit.x);
+  // Range noise: each return lands a little in front of or behind the surface.
+  p += dir * (hash(vec3(gl_FragCoord.xy, 9.0)) - 0.5) * 0.004;
+  outPoint = vec4(p, intensity);
+}`;
+
+const backdropFragment = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+out vec4 outColor;
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uResolution;
+  vec3 col = mix(vec3(0.64, 0.66, 0.65), vec3(0.85, 0.86, 0.84), uv.y);
+  col *= 1.0 - 0.25 * dot(uv - 0.5, uv - 0.5);
+  outColor = vec4(col, 1.0);
+}`;
+
+const pointVertex = `#version 300 es
+precision highp float;
+uniform sampler2D uCloud;
+uniform vec3 uEye, uRight, uUp, uForward;
+uniform vec2 uProjection;
+uniform float uPixelScale;
+uniform float uTime;
+out vec3 vColor;
+
+const float PERIOD = ${SWEEP.period.toFixed(1)};
+const float TRAVEL = ${SWEEP.travel.toFixed(1)};
+const float REACH = ${SWEEP.reach.toFixed(2)};
+const vec3 BACKDROP = vec3(0.74, 0.76, 0.75);
+
+// Each sweep crosses the plot along a new heading at constant speed.
+vec2 sweepNormal(float index) {
+  float a = index * 2.4;
+  return vec2(cos(a), sin(a));
+}
+
+float crossing(vec3 p, float index) {
+  return (dot(p.xz, sweepNormal(index)) + REACH) / (2.0 * REACH) * TRAVEL;
+}
+
+// Height ramp from a dark loam through slate teal to warm ochre at the cap.
+vec3 heightRamp(float y) {
+  vec3 low = vec3(0.3, 0.31, 0.25), mid = vec3(0.13, 0.36, 0.4), high = vec3(0.8, 0.45, 0.14);
+  return y < 0.5 ? mix(low, mid, smoothstep(0.0, 0.5, y)) : mix(mid, high, smoothstep(0.5, 1.05, y));
+}
+
+void main() {
+  ivec2 size = textureSize(uCloud, 0);
+  vec4 point = texelFetch(uCloud, ivec2(gl_VertexID % size.x, gl_VertexID / size.x), 0);
+
+  float index = floor(uTime / PERIOD);
+  float phase = uTime - index * PERIOD;
+  float since = phase - crossing(point.xyz, index);
+  // Points not yet reached this sweep still carry the previous one; before the
+  // first sweep there is nothing to show.
+  if (since < 0.0) since = index > 0.0 ? phase + PERIOD - crossing(point.xyz, index - 1.0) : -1.0;
+  if (point.w < 0.0 || since < 0.0) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    gl_PointSize = 0.0;
+    return;
+  }
+
+  float persistence = 0.45 + 0.55 * exp(-since / 3.0);
+  float fresh = exp(-since * 6.0);
+  vec3 color = heightRamp(point.y) * (0.3 + 1.1 * point.w);
+  color = mix(BACKDROP, color, persistence);
+  vColor = mix(color, vec3(0.98, 0.93, 0.8), fresh * 0.8);
+
+  vec3 v = point.xyz - uEye;
+  float z = dot(v, uForward);
+  gl_Position = vec4(dot(v, uRight) * uProjection.x, dot(v, uUp) * uProjection.y, z * 1.01 - 0.201, z);
+  gl_PointSize = clamp(0.0055 * uPixelScale / z, 1.5, 9.0) * (1.0 + fresh);
+}`;
+
+const pointFragment = `#version 300 es
+precision highp float;
+in vec3 vColor;
+out vec4 outColor;
+
+void main() {
+  if (length(gl_PointCoord - 0.5) > 0.5) discard;
+  outColor = vec4(vColor, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+function createProgram(vertexSource, fragmentSource) {
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+  return program;
+}
+
+const scanProgram = createProgram(quadVertex, scanFragment);
+const backdropProgram = createProgram(quadVertex, backdropFragment);
+const pointProgram = createProgram(pointVertex, pointFragment);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+// Fire every station's beam once on the GPU; the cloud stays in a float texture.
+function scanCloud() {
+  const width = SCAN.stations * SCAN.columns, height = SCAN.rows;
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, width, height);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  const framebuffer = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+  gl.viewport(0, 0, width, height);
+  gl.useProgram(scanProgram);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.deleteFramebuffer(framebuffer);
+  return { texture, count: width * height };
+}
+
+const cloud = scanCloud();
+const uniforms = Object.fromEntries(
+  ['uCloud', 'uEye', 'uRight', 'uUp', 'uForward', 'uProjection', 'uPixelScale', 'uTime']
+    .map((name) => [name, gl.getUniformLocation(pointProgram, name)]));
+const uBackdropResolution = gl.getUniformLocation(backdropProgram, 'uResolution');
+
+function normalize(v) {
+  const length = Math.hypot(...v);
+  return v.map((value) => value / length);
+}
+
+// A viewer's turntable orbit that dips and rises a little as it goes round.
+function camera(time) {
+  const yaw = 0.3 + time * 0.11;
+  const target = [0, 0.36, 0];
+  const lift = 1.45 + 0.3 * Math.sin(time * 0.07);
+  const eye = [Math.sin(yaw) * 3.6, target[1] + lift, Math.cos(yaw) * 3.6];
+  const forward = normalize(target.map((value, i) => value - eye[i]));
+  const right = normalize([-forward[2], 0, forward[0]]);
+  const up = [
+    right[1] * forward[2] - right[2] * forward[1],
+    right[2] * forward[0] - right[0] * forward[2],
+    right[0] * forward[1] - right[1] * forward[0],
+  ];
+  return { eye, forward, right, up };
+}
+
+function frame(ms) {
+  const time = ms / 1000;
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  gl.viewport(0, 0, w, h);
+
+  gl.disable(gl.DEPTH_TEST);
+  gl.useProgram(backdropProgram);
+  gl.uniform2f(uBackdropResolution, w, h);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  gl.enable(gl.DEPTH_TEST);
+  gl.clear(gl.DEPTH_BUFFER_BIT);
+  gl.useProgram(pointProgram);
+  const view = camera(time);
+  const focal = 2 * LENS * Math.min(w, h);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, cloud.texture);
+  gl.uniform1i(uniforms.uCloud, 0);
+  gl.uniform3fv(uniforms.uEye, view.eye);
+  gl.uniform3fv(uniforms.uRight, view.right);
+  gl.uniform3fv(uniforms.uUp, view.up);
+  gl.uniform3fv(uniforms.uForward, view.forward);
+  gl.uniform2f(uniforms.uProjection, focal / w, focal / h);
+  gl.uniform1f(uniforms.uPixelScale, LENS * Math.min(w, h));
+  gl.uniform1f(uniforms.uTime, time);
+  gl.drawArrays(gl.POINTS, 0, cloud.count);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

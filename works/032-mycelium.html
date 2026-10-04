@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mycelium</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #15100c; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const ctx = canvas.getContext('2d');
+
+// The profile signed distance from MUSHROOM.md, ported to JS: y up, ground at 0,
+// cap about 1.12 wide, top near 1.11. Returns [distance, part]:
+// negative inside; part 0 cap, 1 gills, 2 stem, 3 ring.
+function sdEllipse(x, y, rx, ry) {
+  const k0 = Math.hypot(x / rx, y / ry);
+  const k1 = Math.hypot(x / (rx * rx), y / (ry * ry));
+  return k0 * (k0 - 1) / k1;
+}
+
+function mushroom2D(x, y) {
+  x -= 0.05 * y * y;
+  const r = Math.abs(x);
+  const stemR = 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  let stem = Math.max(r - stemR, Math.abs(y - 0.43) - 0.43);
+  const ring = Math.max(r - 0.096 - (0.66 - y) * 0.32, Math.abs(y - 0.605) - 0.05);
+  const under = 0.82 + 0.02 * (1 - Math.min(r * r / 0.3125, 1));
+  const cap = Math.max(sdEllipse(x, y - 0.8, 0.56, 0.31), under - y);
+  const gills = Math.max(r - 0.55, Math.max(y - under, 0.8 + 0.015 * (1 - Math.min(r * r / 0.27, 1)) - y));
+  stem = Math.max(stem, -Math.min(cap, gills));
+  let res = [cap, 0];
+  if (gills < res[0]) res = [gills, 1];
+  if (stem < res[0]) res = [stem, 2];
+  if (ring < res[0]) res = [ring, 3];
+  return res;
+}
+
+// Warts from the canonical Path2D, as [x, y, radius] on the cap face.
+const WARTS = [
+  [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+  [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+  [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+  [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+].map(([x, y, r]) => [x + 0.032, y, r]);
+
+const CAP_SHADES = ['#6e130b', '#86200f', '#9e2a14', '#b8321a'];
+const SOIL_SHADES = ['#cbbd9c', '#a69676', '#7d6d53', '#574835'];
+
+// Each hypha takes the colour of the part it grows through, so the
+// felt of threads reads as the fly agaric once it is dense enough.
+function threadColor(x, y, part) {
+  // Soil threads dim with distance from the stem so the network fades into the earth.
+  if (y < 0) return SOIL_SHADES[Math.min(Math.floor(Math.hypot(x, y * 1.5) * 4.5), 3)];
+  if (part === 1) return '#d2c6ad';
+  if (part !== 0) return '#e8e2d2';
+  if (WARTS.some(([wx, wy, r]) => Math.hypot(x - wx, (y - wy) / 0.8) < r)) return '#efe7d6';
+  const rim = Math.min(Math.hypot((x - 0.032) / 0.56, (y - 0.8) / 0.31), 0.999);
+  return CAP_SHADES[Math.floor(rim * rim * CAP_SHADES.length)];
+}
+
+const SOIL_DEPTH = 0.6;
+const STEP = 0.0045;
+const MAX_TIPS = 2500;
+
+// A coarse occupancy grid: tips entering a crowded cell tend to stop, so the
+// growth keeps searching for empty space and ends once the shape is felted.
+const CELL = 0.01;
+const GRID_W = Math.ceil(2.4 / CELL), GRID_H = Math.ceil((1.2 + SOIL_DEPTH) / CELL);
+let visits = new Uint8Array(GRID_W * GRID_H);
+const cellOf = (x, y) => Math.floor((y + SOIL_DEPTH) / CELL) * GRID_W + Math.floor((x + 1.2) / CELL);
+
+let tips = [];
+
+function inoculate() {
+  visits = new Uint8Array(GRID_W * GRID_H);
+  tips = [];
+  for (let i = 0; i < 9; i++) {
+    const x = (Math.random() * 2 - 1) * 0.9, y = -SOIL_DEPTH * (0.3 + Math.random() * 0.6);
+    for (let k = 0; k < 3; k++) tips.push({ x, y, angle: Math.random() * Math.PI * 2, turn: 0, age: 0 });
+  }
+}
+
+const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+
+function steer(tip, target, weight) {
+  tip.angle += wrap(target - tip.angle) * weight;
+}
+
+// Advance every tip by one step and return the segments it laid down.
+function grow(segments) {
+  const born = [];
+  tips = tips.filter((tip) => {
+    tip.age++;
+    // A wandering turn rate, smoothed, so each hypha meanders in soft curves.
+    tip.turn = tip.turn * 0.9 + (Math.random() - 0.5) * 0.12;
+    tip.angle += tip.turn;
+    if (tip.y < 0) {
+      // In the soil, hyphae forage toward the base of the stem;
+      steer(tip, Math.atan2(0.02 - tip.y, -tip.x), 0.025);
+      // deep ones turn back up rather than meeting a hard floor;
+      if (tip.y < -SOIL_DEPTH * 0.7) steer(tip, Math.PI / 2, 0.06);
+    } else if (tip.y < 0.78) {
+      // up the stem;
+      steer(tip, Math.PI / 2, 0.03);
+    } else {
+      // and out from its top through the cap.
+      steer(tip, Math.atan2(tip.y - 0.7, tip.x - 0.04), 0.04);
+    }
+    const nx = tip.x + Math.cos(tip.angle) * STEP, ny = tip.y + Math.sin(tip.angle) * STEP;
+    const [d, part] = mushroom2D(nx, ny);
+    if (ny > 0 && d > 0) {
+      // Turn back from the edge of the silhouette, which traces its outline.
+      const e = 0.004;
+      const gx = mushroom2D(nx + e, ny)[0] - d, gy = mushroom2D(nx, ny + e)[0] - d;
+      tip.angle = Math.atan2(-gy, -gx) + (Math.random() - 0.5) * 2;
+      return tip.age < 1500;
+    }
+    if (ny < -SOIL_DEPTH || Math.abs(nx) > 1.15) return false;
+    const cell = cellOf(nx, ny);
+    visits[cell]++;
+    if (visits[cell] > 9 && Math.random() < 0.2) return false;
+    segments.push(tip.x, tip.y, nx, ny, threadColor(nx, ny, part));
+    tip.x = nx;
+    tip.y = ny;
+    if (tips.length + born.length < MAX_TIPS && Math.random() < (ny < 0 ? 0.012 : 0.04)) {
+      const side = Math.random() < 0.5 ? -1 : 1;
+      born.push({ x: nx, y: ny, angle: tip.angle + side * (0.3 + Math.random() * 0.5), turn: 0, age: 0 });
+    }
+    return tip.age < 1500;
+  });
+  tips.push(...born);
+}
+
+let view, threads, threadsCtx, ground;
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width === w && canvas.height === h) return false;
+  canvas.width = w;
+  canvas.height = h;
+  // Portrait screens are limited by the cap's width rather than the height.
+  const s = Math.min(w * 0.75, h * 0.54);
+  view = { w, h, s, x: w / 2, y: h / 2 + 0.3 * s };
+  threads = new OffscreenCanvas(w, h);
+  threadsCtx = threads.getContext('2d');
+  threadsCtx.setTransform(s, 0, 0, -s, view.x, view.y);
+  threadsCtx.lineWidth = Math.max(0.0017 * s, 0.7) / s;
+  threadsCtx.lineCap = 'round';
+  ground = renderGround();
+  return true;
+}
+
+// Dark air above a cross-section of loam flecked with grit.
+function renderGround() {
+  const { w, h, s, y } = view;
+  const image = new OffscreenCanvas(w, h);
+  const c = image.getContext('2d');
+  const air = c.createLinearGradient(0, 0, 0, y);
+  air.addColorStop(0, '#120e0b');
+  air.addColorStop(1, '#1d1712');
+  c.fillStyle = air;
+  c.fillRect(0, 0, w, y);
+  const soil = c.createLinearGradient(0, y, 0, h);
+  soil.addColorStop(0, '#2e2117');
+  soil.addColorStop(1, '#1a120c');
+  c.fillStyle = soil;
+  c.fillRect(0, y, w, h - y);
+  for (let i = 0; i < w * (h - y) / 900; i++) {
+    const r = (0.002 + Math.random() * Math.random() * 0.01) * s;
+    c.fillStyle = Math.random() < 0.5 ? 'rgba(10, 6, 3, 0.5)' : 'rgba(120, 95, 70, 0.18)';
+    c.beginPath();
+    c.ellipse(Math.random() * w, y + Math.random() * (h - y), r, r * 0.7, Math.random() * 3, 0, Math.PI * 2);
+    c.fill();
+  }
+  return image;
+}
+
+function draw(segments) {
+  const byColor = new Map();
+  for (let i = 0; i < segments.length; i += 5) {
+    let path = byColor.get(segments[i + 4]);
+    if (!path) byColor.set(segments[i + 4], path = new Path2D());
+    path.moveTo(segments[i], segments[i + 1]);
+    path.lineTo(segments[i + 2], segments[i + 3]);
+  }
+  threadsCtx.globalAlpha = 0.45;
+  for (const [color, path] of byColor) {
+    threadsCtx.strokeStyle = color;
+    threadsCtx.stroke(path);
+  }
+}
+
+// One growth cycle in seconds: the felt grows, holds, then decays to soil.
+const CYCLE = 24, HOLD = 17, DECAY = 20;
+const STEPS_PER_SECOND = 60;
+
+function restart() {
+  inoculate();
+  threadsCtx.clearRect(-10, -10, 20, 20);
+}
+
+resize();
+restart();
+// Start partway into the first cycle so the shape is already emerging.
+let simTime = 6, pending = simTime * STEPS_PER_SECOND;
+
+let last = performance.now();
+function frame(ms) {
+  const dt = Math.min((ms - last) / 1000, 0.1);
+  last = ms;
+  if (resize()) restart();
+  const before = simTime;
+  simTime += dt;
+  if (Math.floor(simTime / CYCLE) !== Math.floor(before / CYCLE)) restart();
+  const u = simTime % CYCLE;
+
+  pending += dt * STEPS_PER_SECOND;
+  const segments = [];
+  for (; pending >= 1; pending--) if (u < HOLD) grow(segments);
+  draw(segments);
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(ground, 0, 0);
+  ctx.globalAlpha = 1 - Math.min(Math.max((u - DECAY) / (CYCLE - DECAY), 0), 1);
+  ctx.drawImage(threads, 0, 0);
+  ctx.globalAlpha = 1;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

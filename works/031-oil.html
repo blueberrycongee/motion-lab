@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oil</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #2a241b; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2', { antialias: false });
+
+// The painting is made on two offscreen canvases: colour, and paint thickness that the
+// display lights from a low angle. Their long side is capped to keep uploads cheap.
+const PAINT_MAX = 1100;
+const FOCUS = { x: 0.03, y: 0.52 };
+const hexRgb = (hex) => [0, 8, 16].map((shift) => (parseInt(hex.slice(1), 16) >> (16 - shift)) & 255);
+const GROUND = '#9c8360';
+const SKETCH = hexRgb('#4a2f1e');
+
+// Passes from sketch to impasto: brush width (mushroom units), paint thickness,
+// how long the painter spends on it (seconds), and how far each stroke runs.
+const PASSES = [
+  { width: 0.012, thick: 0.08, dur: 2.5 },
+  { width: 0.12, thick: 0.3, dur: 9, length: [2.5, 4.5] },
+  { width: 0.055, thick: 0.45, dur: 8, length: [2.5, 5] },
+  { width: 0.026, thick: 0.6, dur: 6, length: [2, 4] },
+  { width: 0.05, thick: 0.95, dur: 3, length: [1, 1.6] },
+];
+const HOLD = 7, FADE = 2.5;
+const CYCLE = PASSES.reduce((sum, p) => sum + p.dur, 0) + HOLD + FADE;
+
+// The mushroom in profile as Path2D, in mushroom units: y up, ground at 0,
+// cap about 1.12 wide, top near 1.11. Draw with ctx.setTransform(s, 0, 0, -s, x, groundY).
+function mushroomPaths() {
+  const lean = (y) => 0.05 * y * y;
+  const stemR = (y) => 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  const outline = (y0, y1, radius) => {
+    const path = new Path2D();
+    const n = 32;
+    for (let i = 0; i <= n; i++) {
+      const y = y0 + (y1 - y0) * (i / n);
+      path.lineTo(lean(y) + radius(y), y);
+    }
+    for (let i = n; i >= 0; i--) {
+      const y = y0 + (y1 - y0) * (i / n);
+      path.lineTo(lean(y) - radius(y), y);
+    }
+    path.closePath();
+    return path;
+  };
+  const stem = outline(0, 0.86, stemR);
+  const ring = outline(0.555, 0.655, (y) => 0.096 + (0.66 - y) * 0.32);
+
+  const cx = lean(0.8), a = Math.asin(0.02 / 0.31);
+  const cap = new Path2D();
+  cap.ellipse(cx, 0.8, 0.56, 0.31, 0, a, Math.PI - a);
+  cap.quadraticCurveTo(cx, 0.86, cx + 0.559, 0.82);
+  cap.closePath();
+
+  const gills = new Path2D();
+  gills.moveTo(cx - 0.55, 0.822);
+  gills.quadraticCurveTo(cx, 0.862, cx + 0.55, 0.822);
+  gills.lineTo(cx + 0.52, 0.8);
+  gills.quadraticCurveTo(cx, 0.83, cx - 0.52, 0.8);
+  gills.closePath();
+
+  // Warts on the visible face of the cap: [x, y, radius].
+  const spots = [
+    [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+    [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+    [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+    [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+  ].map(([x, y, r]) => {
+    const path = new Path2D();
+    path.ellipse(cx + x, y, r, r * 0.8, 0, 0, Math.PI * 2);
+    return path;
+  });
+  return { cap, gills, stem, ring, spots };
+}
+
+const CX = 0.032;
+const paths = mushroomPaths();
+const probe = new OffscreenCanvas(1, 1).getContext('2d');
+const TABLE_EDGE = (x) => 0.3 + 0.03 * x;
+
+function regionAt(x, y) {
+  const inside = (path) => probe.isPointInPath(path, x, y);
+  if (inside(paths.cap)) return paths.spots.some(inside) ? 'wart' : 'cap';
+  if (inside(paths.gills)) return 'gills';
+  if (inside(paths.ring)) return 'ring';
+  if (inside(paths.stem)) return 'stem';
+  return y < TABLE_EDGE(x) ? 'table' : 'background';
+}
+
+const hash = (x, y) => {
+  const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return h - Math.floor(h);
+};
+
+function smoothNoise(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
+  const top = hash(ix, iy) + (hash(ix + 1, iy) - hash(ix, iy)) * u;
+  const bottom = hash(ix, iy + 1) + (hash(ix + 1, iy + 1) - hash(ix, iy + 1)) * u;
+  return top + (bottom - top) * v;
+}
+
+// The still life the painter looks at, lit from the upper left, rendered once and
+// sampled for each brushload.
+const REF = { x0: -2.4, y0: -1.4, x1: 2.4, y1: 2.4, scale: 120 };
+function reference() {
+  const w = Math.round((REF.x1 - REF.x0) * REF.scale), h = Math.round((REF.y1 - REF.y0) * REF.scale);
+  const c = new OffscreenCanvas(w, h).getContext('2d');
+  c.setTransform(REF.scale, 0, 0, -REF.scale, -REF.x0 * REF.scale, REF.y1 * REF.scale);
+  const linear = (x0, y0, x1, y1, stops) => {
+    const g = c.createLinearGradient(x0, y0, x1, y1);
+    stops.forEach(([at, colour]) => g.addColorStop(at, colour));
+    return g;
+  };
+  const radial = (x, y, r, stops) => {
+    const g = c.createRadialGradient(x, y, 0, x, y, r);
+    stops.forEach(([at, colour]) => g.addColorStop(at, colour));
+    return g;
+  };
+  c.fillStyle = radial(-0.7, 1.4, 2.6, [[0, '#5b4c33'], [0.45, '#3a3123'], [1, '#1c1913']]);
+  c.fillRect(REF.x0, REF.y0, REF.x1 - REF.x0, REF.y1 - REF.y0);
+  c.beginPath();
+  c.moveTo(REF.x0, TABLE_EDGE(REF.x0));
+  c.lineTo(REF.x1, TABLE_EDGE(REF.x1));
+  c.lineTo(REF.x1, REF.y0);
+  c.lineTo(REF.x0, REF.y0);
+  c.fillStyle = linear(0, 0.3, 0, -1, [[0, '#7a5634'], [0.06, '#5e3f25'], [1, '#2b1d12']]);
+  c.fill();
+  c.fillStyle = radial(0.42, 0.02, 0.36, [[0, 'rgba(24,15,9,0.85)'], [1, 'rgba(24,15,9,0)']]);
+  c.save();
+  c.scale(1, 0.2);
+  c.fillRect(0, -0.5, 0.9, 1);
+  c.restore();
+  c.fillStyle = linear(-0.15, 0, 0.25, 0, [[0, '#f3ecdb'], [0.45, '#ddd2b9'], [1, '#8f8166']]);
+  c.fill(paths.stem);
+  c.fillStyle = linear(0, 0.66, 0, 0.555, [[0, '#ebe3cf'], [0.6, '#cfc3a6'], [1, '#7e7158']]);
+  c.fill(paths.ring);
+  c.fillStyle = linear(-0.5, 0, 0.6, 0, [[0, '#c9b995'], [1, '#7f7058']]);
+  c.fill(paths.gills);
+  c.fillStyle = radial(CX - 0.22, 1.03, 0.7, [
+    [0, '#f2864a'], [0.22, '#d8471f'], [0.5, '#b8321a'], [0.78, '#82200f'], [1, '#55100a']]);
+  c.fill(paths.cap);
+  c.fillStyle = radial(CX - 0.15, 1.05, 0.8, [[0, '#f6efe0'], [0.6, '#e3d7bf'], [1, '#a8987a']]);
+  paths.spots.forEach((spot) => c.fill(spot));
+  const data = c.getImageData(0, 0, w, h).data;
+  return (x, y) => {
+    const i = Math.min(Math.max(Math.round((x - REF.x0) * REF.scale), 0), w - 1);
+    const j = Math.min(Math.max(Math.round((REF.y1 - y) * REF.scale), 0), h - 1);
+    const k = (j * w + i) * 4;
+    return [data[k], data[k + 1], data[k + 2]];
+  };
+}
+const look = reference();
+
+// Painters follow the form: around the dome of the cap, down the stem, across the
+// table, and in loose diagonal patches over the background.
+function direction(x, y, region) {
+  switch (region) {
+    case 'cap':
+    case 'wart': {
+      const gx = (x - CX) / 0.56 ** 2, gy = (y - 0.8) / 0.31 ** 2;
+      return [-gy, gx];
+    }
+    case 'stem': return [0.1 * y, 1];
+    case 'ring':
+    case 'gills': return [1, 0.05];
+    case 'table': return [1, 0.1 * (smoothNoise(x * 2, y * 2) - 0.5)];
+    default: {
+      const angle = 0.5 + 1.4 * smoothNoise(x * 1.6 + 5, y * 1.6);
+      return [Math.cos(angle), Math.sin(angle)];
+    }
+  }
+}
+
+function mulberry32(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Follow the direction field from a start point; later passes stop at the edge of
+// the region they started in so the drawing tightens.
+function trace(x, y, width, steps, keepRegion, random) {
+  const region = regionAt(x, y);
+  const points = [[x, y]];
+  let [dx, dy] = direction(x, y, region);
+  if (random() < 0.5) [dx, dy] = [-dx, -dy];
+  const bend = (random() - 0.5) * 0.25;
+  for (let i = 0; i < steps; i++) {
+    let [nx, ny] = direction(x, y, region);
+    if (nx * dx + ny * dy < 0) [nx, ny] = [-nx, -ny];
+    const len = Math.hypot(nx, ny) || 1;
+    [dx, dy] = [nx / len - bend * ny / len, ny / len + bend * nx / len];
+    x += dx * width * 0.4;
+    y += dy * width * 0.4;
+    if (keepRegion && regionAt(x, y) !== region) break;
+    points.push([x, y]);
+  }
+  return { points, region };
+}
+
+const toCss = ([r, g, b]) => `rgb(${r | 0},${g | 0},${b | 0})`;
+const ORDER = { background: 0, table: 1, stem: 2, ring: 3, gills: 3, cap: 4, wart: 5 };
+
+function brushload(points, region, pass, random, previous) {
+  const [mx, my] = points[points.length >> 1];
+  const value = 1 + (random() - 0.5) * 0.12;
+  const colour = look(mx, my).map((c) => Math.min(c * value, 255));
+  return {
+    points, region, colour, previous: previous || colour,
+    width: pass.width * (0.8 + 0.4 * random()), thick: pass.thick, dry: 0.3 + 0.6 * random(),
+    seed: random() * 1000,
+  };
+}
+
+// A grid of starting points with jitter, then sorted into the painter's working order.
+function passStrokes(pass, bounds, keep, random) {
+  const strokes = [];
+  const spacing = pass.width * 0.6;
+  for (let y = bounds.y0; y < bounds.y1; y += spacing) {
+    for (let x = bounds.x0; x < bounds.x1; x += spacing) {
+      const px = x + (random() - 0.5) * spacing, py = y + (random() - 0.5) * spacing;
+      if (!keep(px, py)) continue;
+      const [lo, hi] = pass.length;
+      const steps = Math.round((lo + (hi - lo) * random()) / 0.4);
+      const { points, region } = trace(px, py, pass.width, steps, pass !== PASSES[1], random);
+      if (points.length < 3) continue;
+      strokes.push({ ...brushload(points, region, pass, random), order: ORDER[region] - py * 0.4 + px * 0.15 + random() * 0.5 });
+    }
+  }
+  return strokes.sort((a, b) => a.order - b.order);
+}
+
+function contrast(x, y, d) {
+  const c = look(x, y);
+  return Math.max(...[[d, 0], [-d, 0], [0, d], [0, -d]].map(([ox, oy]) => {
+    const n = look(x + ox, y + oy);
+    return Math.abs(n[0] - c[0]) + Math.abs(n[1] - c[1]) + Math.abs(n[2] - c[2]);
+  }));
+}
+
+function sketchStrokes(random) {
+  const lean = (y) => 0.05 * y * y;
+  const stemR = (y) => 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  const arc = (from, to, n) => Array.from({ length: n + 1 }, (_, i) => {
+    const a = from + (to - from) * i / n;
+    return [CX + 0.56 * Math.cos(a), 0.8 + 0.31 * Math.sin(a)];
+  });
+  const side = (sign) => Array.from({ length: 12 }, (_, i) => [lean(i * 0.07) + sign * stemR(i * 0.07), i * 0.07]);
+  const lines = [arc(Math.PI, 0, 24), [[CX - 0.56, 0.82], [CX, 0.86], [CX + 0.56, 0.82]], side(-1), side(1),
+    [[-0.6, 0.0], [0.75, 0.02]], [[-1.4, TABLE_EDGE(-1.4)], [1.4, TABLE_EDGE(1.4)]]];
+  return lines.map((points) => ({
+    points: points.map(([x, y]) => [x + (random() - 0.5) * 0.01, y + (random() - 0.5) * 0.01]),
+    region: 'sketch', colour: SKETCH, previous: SKETCH,
+    width: PASSES[0].width, thick: PASSES[0].thick, dry: 0.6, seed: random() * 1000,
+  }));
+}
+
+function wartDabs(random) {
+  const strokes = [];
+  for (const [x, y, r] of [
+    [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+    [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+    [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+    [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016]]) {
+    for (let k = 0; k < 2; k++) {
+      const a = random() * Math.PI, d = r * 0.5;
+      const sx = CX + x - Math.cos(a) * d, sy = y - Math.sin(a) * d * 0.8;
+      const points = [0, 1, 2, 3].map((i) => [sx + Math.cos(a) * d * 0.66 * i, sy + Math.sin(a) * d * 0.53 * i]);
+      const stroke = brushload(points, 'wart', PASSES[4], random);
+      stroke.width = r * 1.5;
+      strokes.push(stroke);
+    }
+  }
+  return strokes;
+}
+
+// The whole painting for one cycle, each stroke timed within its pass by its length.
+function plan(bounds, seed) {
+  const random = mulberry32(seed);
+  const near = { x0: CX - 0.75, x1: CX + 0.75, y0: -0.25, y1: 1.3 };
+  const passes = [
+    sketchStrokes(random),
+    passStrokes(PASSES[1], bounds, () => true, random),
+    passStrokes(PASSES[2], near, (x, y) => regionAt(x, y) !== 'background' || random() < 0.35, random),
+    passStrokes(PASSES[3], near, (x, y) => contrast(x, y, 0.03) > 40 || (regionAt(x, y) !== 'background' && random() < 0.5), random),
+    wartDabs(random),
+  ];
+  const strokes = [];
+  let start = 0;
+  passes.forEach((list, i) => {
+    const total = list.reduce((sum, s) => sum + s.points.length, 0);
+    let t = start;
+    list.forEach((s, k) => {
+      s.previous = list[Math.max(k - 1, 0)].colour;
+      s.start = t;
+      t += PASSES[i].dur * s.points.length / total;
+      s.end = t;
+      s.drawn = 0;
+      strokes.push(s);
+    });
+    start += PASSES[i].dur;
+  });
+  return strokes;
+}
+
+const vertex = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+// Thickness becomes relief lit by a low light that slowly swings, so ridges of paint
+// glint and cast small shadows; thin paint lets the canvas weave through.
+const fragment = `#version 300 es
+precision highp float;
+uniform sampler2D uColour;
+uniform sampler2D uHeight;
+uniform vec2 uResolution;
+uniform vec2 uPaint;
+uniform vec3 uGround;
+uniform vec3 uLight;
+uniform float uFade;
+out vec4 outColor;
+
+float height(vec2 uv) { return texture(uHeight, uv).r * (1.0 - uFade); }
+
+float weave(vec2 p) {
+  vec2 cell = floor(p / 3.2);
+  vec2 f = fract(p / 3.2) - 0.5;
+  float over = mod(cell.x + cell.y, 2.0);
+  return mix(cos(f.x * 3.14) , cos(f.y * 3.14), over) * 0.5;
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uResolution;
+  vec2 t = 1.0 / uPaint;
+  float h = height(uv);
+  vec2 slope = vec2(height(uv + vec2(t.x, 0)) - height(uv - vec2(t.x, 0)),
+                    height(uv + vec2(0, t.y)) - height(uv - vec2(0, t.y))) * 2.4;
+  vec2 p = uv * uPaint;
+  float bare = 1.0 - smoothstep(0.04, 0.35, h);
+  slope += vec2(weave(p + vec2(0.5, 0)) - weave(p - vec2(0.5, 0)), weave(p + vec2(0, 0.5)) - weave(p - vec2(0, 0.5))) * 0.35 * bare;
+  vec3 n = normalize(vec3(-slope, 1.0));
+  float diffuse = max(dot(n, uLight), 0.0) / uLight.z;
+  vec3 halfway = normalize(uLight + vec3(0, 0, 1));
+  float level = pow(halfway.z, 30.0);
+  float gloss = max(pow(max(dot(n, halfway), 0.0), 30.0) - level, 0.0) * smoothstep(0.1, 0.4, h);
+  vec3 colour = mix(texture(uColour, uv).rgb, uGround, uFade);
+  vec3 col = colour * mix(1.0, diffuse, 0.55) + gloss * vec3(0.5, 0.48, 0.44);
+  vec2 c = uv - 0.5;
+  col *= 1.0 - 0.3 * dot(c, c);
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+gl.bindAttribLocation(program, 0, 'position');
+gl.linkProgram(program);
+if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+gl.useProgram(program);
+const uniform = (name) => gl.getUniformLocation(program, name);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+function texture(unit) {
+  const t = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+const colourTexture = texture(0), heightTexture = texture(1);
+gl.uniform1i(uniform('uColour'), 0);
+gl.uniform1i(uniform('uHeight'), 1);
+gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+gl.uniform3f(uniform('uGround'), ...hexRgb(GROUND).map((c) => c / 255));
+
+let paint, strokes, cycle = -1, next = 0;
+
+function resize(w, h) {
+  const k = Math.min(1, PAINT_MAX / Math.max(w, h));
+  const pw = Math.round(w * k), ph = Math.round(h * k);
+  const s = Math.min(pw / 1.3, ph / 1.75);
+  const colour = new OffscreenCanvas(pw, ph).getContext('2d');
+  const height = new OffscreenCanvas(pw, ph).getContext('2d');
+  for (const c of [colour, height]) {
+    c.setTransform(s, 0, 0, -s, pw / 2 - FOCUS.x * s, ph / 2 + FOCUS.y * s);
+    c.lineCap = 'round';
+  }
+  paint = { colour, height, pw, ph, s, bounds: {
+    x0: FOCUS.x - pw / 2 / s - 0.1, x1: FOCUS.x + pw / 2 / s + 0.1,
+    y0: FOCUS.y - ph / 2 / s - 0.1, y1: FOCUS.y + ph / 2 / s + 0.1 } };
+  cycle = -1;
+  gl.uniform2f(uniform('uPaint'), pw, ph);
+}
+
+function startCycle(n) {
+  for (const [c, fill] of [[paint.colour, GROUND], [paint.height, '#000']]) {
+    c.save();
+    c.resetTransform();
+    c.fillStyle = fill;
+    c.fillRect(0, 0, paint.pw, paint.ph);
+    c.restore();
+  }
+  strokes = plan(paint.bounds, n + 1);
+  next = 0;
+  cycle = n;
+}
+
+const grey = (v) => {
+  const g = Math.round(Math.min(Math.max(v, 0), 1) * 255);
+  return `rgb(${g},${g},${g})`;
+};
+
+// One brush segment: a ribbon of paint, then bristle tracks over it. The load runs out
+// along the stroke, breaking the bristles into dry-brush skips; paint is thickest where
+// the brush lands and is pushed into ridges at its edges.
+function drawSegment(stroke, i) {
+  const { colour, height, s } = paint;
+  const n = stroke.points.length - 1;
+  const [a, b] = [stroke.points[i], stroke.points[i + 1]];
+  const ua = i / n, ub = (i + 1) / n;
+  const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len, ny = dx / len;
+  const width = stroke.width * (0.75 + 0.25 * Math.min(ua * 4, 1)) * (1 - 0.15 * ua);
+  const load = 1 - stroke.dry * ua ** 1.5;
+  const bristles = Math.min(Math.max(Math.round(stroke.width * s / 4), 2), 12);
+  const lump = 1 + 0.4 * Math.max(0, 1 - ua / 0.15);
+
+  colour.globalAlpha = stroke.region === 'sketch' ? 0.75 : Math.min(load * 1.3, 1);
+  height.globalAlpha = colour.globalAlpha;
+  colour.fillStyle = toCss(stroke.colour);
+  height.fillStyle = grey(stroke.thick * 0.8 * lump);
+  for (const c of [colour, height]) {
+    c.beginPath();
+    c.moveTo(a[0] + nx * width / 2, a[1] + ny * width / 2);
+    c.lineTo(b[0] + nx * width / 2, b[1] + ny * width / 2);
+    c.lineTo(b[0] - nx * width / 2, b[1] - ny * width / 2);
+    c.lineTo(a[0] - nx * width / 2, a[1] - ny * width / 2);
+    c.fill();
+  }
+
+  colour.globalAlpha = height.globalAlpha = 1;
+  colour.lineWidth = height.lineWidth = width / bristles * 1.1;
+  for (let k = 0; k < bristles; k++) {
+    const r = hash(stroke.seed, k);
+    if (hash(stroke.seed + i * 0.37, k + 0.5) > load + 0.15) continue;
+    const across = ((k + 0.5) / bristles - 0.5) * width * (1 + 0.1 * (r - 0.5));
+    const edge = Math.abs((k + 0.5) / bristles - 0.5) > 0.38 ? 0.18 : 0;
+    const shade = 0.9 + 0.2 * r;
+    const mixed = r > 0.8 ? stroke.previous : stroke.colour;
+    colour.strokeStyle = toCss(mixed.map((c) => Math.min(c * shade, 255)));
+    height.strokeStyle = grey(stroke.thick * (0.7 + 0.5 * r + edge) * lump * (0.7 + 0.3 * load));
+    for (const c of [colour, height]) {
+      c.beginPath();
+      c.moveTo(a[0] + nx * across, a[1] + ny * across);
+      c.lineTo(b[0] + nx * across, b[1] + ny * across);
+      c.stroke();
+    }
+  }
+}
+
+function paintUpTo(t) {
+  let changed = false;
+  while (next < strokes.length && strokes[next].start <= t) {
+    const stroke = strokes[next];
+    const segments = stroke.points.length - 1;
+    const due = Math.min(Math.ceil((t - stroke.start) / (stroke.end - stroke.start) * segments), segments);
+    for (; stroke.drawn < due; stroke.drawn++) drawSegment(stroke, stroke.drawn);
+    changed = true;
+    if (stroke.drawn < segments) break;
+    next++;
+  }
+  return changed;
+}
+
+function upload() {
+  gl.activeTexture(gl.TEXTURE0);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, paint.colour.canvas);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, paint.height.canvas);
+}
+
+function frame(ms) {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    gl.viewport(0, 0, w, h);
+    gl.uniform2f(uniform('uResolution'), w, h);
+    resize(w, h);
+  }
+  const time = ms / 1000;
+  const n = Math.floor(time / CYCLE), t = time % CYCLE;
+  const fresh = n !== cycle;
+  if (fresh) startCycle(n);
+  if (paintUpTo(t) || fresh) upload();
+  const swing = 2.4 + 0.5 * Math.sin(time * 0.15);
+  gl.uniform3f(uniform('uLight'), Math.cos(swing) * 0.8, Math.sin(swing) * 0.8, 0.6);
+  gl.uniform1f(uniform('uFade'), Math.min(Math.max((t - CYCLE + FADE) / FADE, 0), 1));
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

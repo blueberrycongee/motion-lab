@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hologram</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14110e; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+
+// The projection is soft light, so its volume march runs at half resolution.
+const RENDER_SCALE = 0.5;
+
+const vertex = `#version 300 es
+layout(location = 0) in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+// Both passes must agree on the view, so the camera lives in one shared chunk.
+const common = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform float uTime;
+
+const vec3 HOLOGRAM_ORIGIN = vec3(0.0, 0.24, 0.0);
+const float HOLOGRAM_SCALE = 0.8;
+
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(vec3(i, 0.0)), hash(vec3(i + vec2(1, 0), 0.0)), f.x),
+             mix(hash(vec3(i + vec2(0, 1), 0.0)), hash(vec3(i + vec2(1, 1), 0.0)), f.x), f.y);
+}
+
+void camera(out vec3 ro, out vec3 rd) {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / min(uResolution.x, uResolution.y);
+  float yaw = 0.18 * sin(uTime * 0.05);
+  vec3 target = vec3(0.0, 0.58, 0.0);
+  ro = target + vec3(sin(yaw) * 3.1, 0.62, cos(yaw) * 3.1);
+  vec3 fw = normalize(target - ro);
+  vec3 rt = normalize(cross(fw, vec3(0, 1, 0)));
+  vec3 up = cross(rt, fw);
+  rd = normalize(uv.x * rt + uv.y * up + 1.8 * fw);
+}
+`;
+
+const hologramFragment = common + `
+out vec4 outHologram;
+
+const vec3 BOUNDS_CENTER = vec3(0.0, 0.56, 0.0);
+const float BOUNDS_RADIUS = 0.82;
+
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom: ground at y = 0, cap top near y = 1.11, cap about 1.12 wide.
+// Returns distance and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom(vec3 p) {
+  p.x -= 0.05 * p.y * p.y;                       // a slight lean
+  float r = length(p.xz);
+
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43) * 0.8;
+
+  float frill = 0.008 * sin(atan(p.z, p.x) * 9.0);
+  float skirt = abs(r - (0.096 + (0.66 - p.y) * 0.32 + frill * smoothstep(0.64, 0.56, p.y))) - 0.009;
+  float ring = max(skirt, abs(p.y - 0.605) - 0.05) * 0.7;
+
+  vec3 c = p - vec3(0.0, 0.8, 0.0);
+  float dome = sdEllipsoid(c, vec3(0.56, 0.31, 0.56));
+  dome += 0.008 * sin(c.x * 11.0 + 1.3) * sin(c.z * 9.0) * sin(c.y * 7.0 + c.x * 5.0);
+  float under = 0.82 + 0.08 * (1.0 - min(r * r / 0.31, 1.0));
+  float cap = max(dome, under - p.y);
+  float gills = max(dome + 0.02, max(p.y - under - 0.004, under - 0.04 - p.y));
+
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  float body = smin(stem, max(cap, gills), 0.03);
+  if (body < res.x - 0.001) res = vec2(body, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+
+vec3 rotateY(vec3 v, float a) {
+  float c = cos(a), s = sin(a);
+  return vec3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z);
+}
+
+// A projected image has no opaque surface: every shell it crosses adds light,
+// so the far side shows through and grazing edges read brightest.
+void main() {
+  vec3 ro, rd;
+  camera(ro, rd);
+  float spin = uTime * 0.35;
+  ro = rotateY((ro - HOLOGRAM_ORIGIN) / HOLOGRAM_SCALE, spin);
+  rd = rotateY(rd, spin);
+
+  float shell = 0.0, body = 0.0, gillLines = 0.0;
+  vec3 oc = ro - BOUNDS_CENTER;
+  float b = dot(oc, rd);
+  float disc = b * b - dot(oc, oc) + BOUNDS_RADIUS * BOUNDS_RADIUS;
+  if (disc > 0.0) {
+    const float STEP = 0.012;
+    float t = max(-b - sqrt(disc), 0.0) + STEP * hash(vec3(gl_FragCoord.xy, 3.0));
+    float tEnd = -b + sqrt(disc);
+    for (int i = 0; i < 110; i++) {
+      vec3 p = ro + rd * t;
+      vec2 m = mushroom(p);
+      if (m.x > 0.03) {
+        t += m.x - 0.02;
+      } else {
+        shell += exp(-abs(m.x) * 160.0) * STEP;
+        body += step(m.x, 0.0) * STEP;
+        if (m.y > 0.5 && m.y < 1.5) {
+          gillLines += pow(0.5 + 0.5 * cos(atan(p.z, p.x) * 36.0), 8.0) * step(m.x, 0.0) * STEP;
+        }
+        t += STEP;
+      }
+      if (t > tEnd) break;
+    }
+  }
+  outHologram = vec4(1.0 - exp(-shell * 9.0), 1.0 - exp(-body * 3.0), 1.0 - exp(-gillLines * 30.0), 1.0);
+}`;
+
+const roomFragment = common + `
+uniform sampler2D uHologram;
+out vec4 outColor;
+
+const vec3 BEAM = vec3(0.5, 0.82, 0.86);
+const vec3 LAMP = vec3(1.0, 0.72, 0.45);
+const vec3 LAMP_POSITION = vec3(-3.2, 2.4, 0.6);
+const float DESK_BACK = -1.5;
+const float WALL = -2.3;
+
+float grain(vec2 p) {
+  vec3 q = fract(vec3(p.xyx) * 0.1031);
+  q += dot(q, q.yzx + 33.33);
+  return fract((q.x + q.y) * q.z);
+}
+
+float puck(vec3 p) {
+  vec2 d = vec2(length(p.xz) - 0.27, abs(p.y - 0.04) - 0.028);
+  return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - 0.012;
+}
+
+vec3 puckNormal(vec3 p) {
+  vec2 e = vec2(0.001, 0.0);
+  return normalize(vec3(puck(p + e.xyy) - puck(p - e.xyy),
+                        puck(p + e.yxy) - puck(p - e.yxy),
+                        puck(p + e.yyx) - puck(p - e.yyx)));
+}
+
+float tracePuck(vec3 ro, vec3 rd) {
+  // Cheap bounding slab test before marching the small emitter.
+  float b = dot(ro - vec3(0.0, 0.04, 0.0), rd);
+  float c = dot(ro - vec3(0.0, 0.04, 0.0), ro - vec3(0.0, 0.04, 0.0)) - 0.09;
+  if (b * b - c < 0.0) return -1.0;
+  float t = max(-b - sqrt(b * b - c), 0.0);
+  for (int i = 0; i < 48; i++) {
+    float d = puck(ro + rd * t);
+    if (d < 0.0005) return t;
+    t += d;
+    if (t > -b + sqrt(b * b - c)) break;
+  }
+  return -1.0;
+}
+
+// Light that the projection itself throws onto nearby surfaces.
+vec3 beamSpill(vec3 p, vec3 n) {
+  vec3 source = vec3(0.0, 0.62, 0.0);
+  vec3 l = source - p;
+  float d2 = dot(l, l);
+  return BEAM * max(dot(n, normalize(l)), 0.0) * 0.16 / (0.15 + d2);
+}
+
+vec3 lampLight(vec3 p, vec3 n) {
+  vec3 l = LAMP_POSITION - p;
+  return LAMP * max(dot(n, normalize(l)), 0.0) * 1.3 / dot(l, l);
+}
+
+vec3 desk(vec3 p, vec3 rd) {
+  vec2 g = p.xz;
+  float grain = noise(vec2(g.x * 3.0 + noise(g * vec2(1.0, 6.0)) * 2.5, g.y * 40.0));
+  vec3 wood = mix(vec3(0.075, 0.048, 0.03), vec3(0.13, 0.085, 0.05), grain);
+  vec3 n = vec3(0.0, 1.0, 0.0);
+  float contact = smoothstep(0.26, 0.5, length(g));
+  vec3 col = wood * (lampLight(p, n) + beamSpill(p, n) * contact + 0.05);
+  // A low sheen of the lamp in the varnish.
+  vec3 h = normalize(normalize(LAMP_POSITION - p) - rd);
+  col += LAMP * pow(max(h.y, 0.0), 60.0) * 0.05;
+  return col * mix(0.55, 1.0, contact);
+}
+
+vec3 wall(vec3 p) {
+  vec3 col = vec3(0.15, 0.15, 0.13) * (lampLight(p, vec3(0.0, 0.0, 1.0)) * 2.5 + 0.03);
+  // Streetlight through a blind lays a slanted ladder of stripes on the wall.
+  vec2 w = vec2(p.x - 0.45 * p.y, p.y);
+  float frame = smoothstep(0.05, 0.0, abs(w.x - 1.7) - 0.75) * smoothstep(0.05, 0.0, abs(w.y - 1.55) - 0.6);
+  float slats = smoothstep(0.0, 0.7, abs(fract(w.y * 9.0) - 0.5) * 2.0);
+  col += vec3(0.32, 0.36, 0.4) * frame * slats * 0.045;
+  return col;
+}
+
+vec3 room(vec3 ro, vec3 rd, out float tHit) {
+  tHit = 1e9;
+  float tPuck = tracePuck(ro, rd);
+  if (tPuck > 0.0) {
+    tHit = tPuck;
+    vec3 p = ro + rd * tPuck;
+    vec3 n = puckNormal(p);
+    float r = length(p.xz);
+    vec3 metal = vec3(0.05, 0.05, 0.055);
+    vec3 col = metal * (lampLight(p, n) * 2.0 + 0.04);
+    vec3 h = normalize(normalize(LAMP_POSITION - p) - rd);
+    col += LAMP * pow(max(dot(n, h), 0.0), 40.0) * 0.18;
+    col += BEAM * pow(1.0 - abs(dot(n, rd)), 4.0) * 0.06;
+    if (n.y > 0.9) {
+      // The lens: a recessed disc of emitters behind a fine grille.
+      float lens = smoothstep(0.155, 0.145, r);
+      col = mix(col, BEAM * (0.35 + 0.35 * smoothstep(0.15, 0.0, r)), lens);
+      col += BEAM * smoothstep(0.012, 0.0, abs(r - 0.2)) * 0.25;
+    }
+    return col;
+  }
+  float tDesk = rd.y < 0.0 ? -ro.y / rd.y : 1e9;
+  vec3 deskPoint = ro + rd * tDesk;
+  if (tDesk < 1e8 && deskPoint.z > DESK_BACK) {
+    tHit = tDesk;
+    return desk(deskPoint, rd);
+  }
+  float tWall = (WALL - ro.z) / rd.z;
+  vec3 p = ro + rd * tWall;
+  tHit = tWall;
+  // Below the desk's back edge the floor falls away into shadow.
+  return p.y > -0.02 ? wall(p) : vec3(0.004, 0.0035, 0.003);
+}
+
+// The beam widens from the lens to the image; dust in the air catches it.
+vec3 projectionCone(vec3 ro, vec3 rd, float tMax) {
+  float glow = 0.0;
+  for (int i = 0; i < 20; i++) {
+    float t = 2.2 + 1.8 * (float(i) + 0.5) / 20.0;
+    if (t > tMax) break;
+    vec3 p = ro + rd * t;
+    float h = p.y - 0.07;
+    if (h < 0.0 || h > 1.1) continue;
+    float radius = 0.15 + h * 0.45;
+    float inside = smoothstep(radius, radius * 0.6, length(p.xz));
+    float dust = 0.6 + 0.8 * noise(vec2(p.x * 14.0 + uTime * 0.2, p.y * 9.0 - uTime * 0.3));
+    glow += inside * dust * exp(-h * 2.6) * smoothstep(1.1, 0.6, h);
+  }
+  return BEAM * glow * 0.02;
+}
+
+void main() {
+  vec3 ro, rd;
+  camera(ro, rd);
+  float tHit;
+  vec3 col = room(ro, rd, tHit);
+  col += projectionCone(ro, rd, tHit);
+
+  vec2 uv = gl_FragCoord.xy / uResolution;
+  float frameTime = floor(uTime * 24.0);
+  // A rare tearing glitch shifts a band of rows sideways for a frame or two.
+  float tear = step(0.985, hash(vec3(floor(uTime * 6.0), 1.0, 2.0)));
+  float band = step(abs(fract(uv.y * 3.0 + hash(vec3(frameTime, 4.0, 1.0))) - 0.5), 0.06);
+  uv.x += tear * band * 0.012;
+
+  vec4 h = texture(uHologram, uv);
+  float scanline = 0.62 + 0.38 * smoothstep(0.2, 0.8, abs(fract(gl_FragCoord.y / 3.0 - uTime * 2.0) - 0.5) * 2.0);
+  float interference = 0.78 + 0.22 * sin(uv.y * 26.0 - uTime * 1.3 + sin(uv.x * 4.0 + uTime * 0.4));
+  float flicker = 0.9 + 0.1 * noise(vec2(uTime * 14.0, 0.0)) - 0.25 * tear;
+  float image = pow(h.r, 1.5) * 0.9 + h.g * 0.04 + h.b * 0.3;
+  // The image fades towards its base where the beam is still converging.
+  float fadeIn = smoothstep(0.05, 0.25, h.r + h.g);
+  vec3 hologram = BEAM * image * scanline * interference * flicker * fadeIn;
+  col += hologram * 0.6;
+
+  vec2 q = gl_FragCoord.xy / uResolution - 0.5;
+  col *= 1.0 - 0.45 * dot(q, q);
+  col += (grain(gl_FragCoord.xy + frameTime * 17.0) - 0.5) * 0.012;
+  col = col / (1.0 + col * 0.4);
+  outColor = vec4(pow(max(col, 0.0), vec3(0.4545)), 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+function createProgram(fragmentSource) {
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+  return program;
+}
+
+const hologramProgram = createProgram(hologramFragment);
+const roomProgram = createProgram(roomFragment);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+const hologramUniforms = {
+  resolution: gl.getUniformLocation(hologramProgram, 'uResolution'),
+  time: gl.getUniformLocation(hologramProgram, 'uTime'),
+};
+const roomUniforms = {
+  resolution: gl.getUniformLocation(roomProgram, 'uResolution'),
+  time: gl.getUniformLocation(roomProgram, 'uTime'),
+  hologram: gl.getUniformLocation(roomProgram, 'uHologram'),
+};
+
+function target(width, height) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const framebuffer = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+  return { framebuffer, texture, width, height };
+}
+
+let buffer = null;
+function frame(ms) {
+  const time = ms / 1000;
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  const sw = Math.round(w * RENDER_SCALE), sh = Math.round(h * RENDER_SCALE);
+  if (!buffer || buffer.width !== sw || buffer.height !== sh) {
+    if (buffer) {
+      gl.deleteFramebuffer(buffer.framebuffer);
+      gl.deleteTexture(buffer.texture);
+    }
+    buffer = target(sw, sh);
+  }
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, buffer.framebuffer);
+  gl.viewport(0, 0, sw, sh);
+  gl.useProgram(hologramProgram);
+  gl.uniform2f(hologramUniforms.resolution, sw, sh);
+  gl.uniform1f(hologramUniforms.time, time);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, w, h);
+  gl.useProgram(roomProgram);
+  gl.uniform2f(roomUniforms.resolution, w, h);
+  gl.uniform1f(roomUniforms.time, time);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, buffer.texture);
+  gl.uniform1i(roomUniforms.hologram, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bubble Wrap</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #8a8580; }
+  canvas { display: block; width: 100%; height: 100%; cursor: pointer; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const ACROSS = 30;           // bubbles across the shorter side of the view
+const ROW = Math.sqrt(3) / 2;
+const REFILL = 9;            // seconds before a popped bubble starts to reinflate
+const REINFLATE = 1.4;
+
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+
+const vertex = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const fragment = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform float uTime;
+uniform float uPitch;
+uniform vec2 uLight;
+uniform highp sampler2D uPopped;
+out vec4 outColor;
+
+const float ROW = 0.8660254;
+const float RADIUS = 0.44;
+const float REFILL = ${REFILL.toFixed(1)};
+const float REINFLATE = ${REINFLATE.toFixed(1)};
+
+float hash(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x),
+             mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
+
+// Nearest bubble centre on a staggered lattice, in pitch units.
+vec2 nearest(vec2 p, out ivec2 cell) {
+  float r0 = floor(p.y / ROW + 0.5);
+  vec2 best = vec2(0);
+  float bestDist = 1e9;
+  for (int k = -1; k <= 1; k++) {
+    float row = r0 + float(k);
+    float offset = mod(row, 2.0) * 0.5;
+    float col = floor(p.x - offset + 0.5);
+    vec2 c = vec2(col + offset, row * ROW);
+    float d = distance(p, c);
+    if (d < bestDist) { bestDist = d; best = c; cell = ivec2(col, row); }
+  }
+  return best;
+}
+
+// 1 = fully inflated, 0 = flat. A stored pop time of 0 means never popped.
+float inflation(ivec2 cell) {
+  float popped = texelFetch(uPopped, clamp(cell, ivec2(0), textureSize(uPopped, 0) - 1), 0).r;
+  if (popped <= 0.0) return 1.0;
+  float age = uTime - popped;
+  return max(1.0 - smoothstep(0.0, 0.08, age), smoothstep(REFILL, REFILL + REINFLATE, age));
+}
+
+float sdEllipse(vec2 p, vec2 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom's profile, one distance per part so each edge can blur on its own:
+// cap, gills, stem, ring. Ground at y = 0, cap top near y = 1.11.
+vec4 mushroom(vec2 p) {
+  p.x -= 0.05 * p.y * p.y;
+  float r = abs(p.x);
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43);
+  float ring = max(r - 0.096 - (0.66 - p.y) * 0.32, abs(p.y - 0.605) - 0.05);
+  float under = 0.82 + 0.02 * (1.0 - min(r * r / 0.3125, 1.0));
+  float cap = max(sdEllipse(p - vec2(0.0, 0.8), vec2(0.56, 0.31)), under - p.y);
+  float gills = max(r - 0.55, max(p.y - under, 0.8 + 0.015 * (1.0 - min(r * r / 0.27, 1.0)) - p.y));
+  return vec4(cap, gills, stem, ring);
+}
+
+// Cream warts on the cap: a jittered grid of small ellipses.
+float warts(vec2 p, float blur) {
+  vec2 g = p * vec2(8.0, 10.0);
+  float d = 1e9;
+  for (int y = -1; y <= 1; y++)
+  for (int x = -1; x <= 1; x++) {
+    vec2 cell = floor(g) + vec2(x, y);
+    if (hash(cell + 0.5) < 0.35) continue;
+    vec2 c = cell + 0.2 + 0.6 * vec2(hash(cell + 1.7), hash(cell + 4.3));
+    d = min(d, length((g - c) * vec2(1.0, 1.25)) - mix(0.14, 0.3, hash(cell + 8.1)));
+  }
+  return 1.0 - smoothstep(-blur * 9.0, blur * 9.0, d);
+}
+
+// The out-of-focus scene behind the film: a fly agaric in moss, lit from the upper left.
+vec3 scene(vec2 uv, float t) {
+  vec3 col = mix(vec3(0.20, 0.25, 0.18), vec3(0.55, 0.57, 0.50), smoothstep(-0.4, 0.6, uv.y));
+  for (int i = 0; i < 4; i++) {
+    float fi = float(i);
+    vec2 c = vec2(-0.75 + 0.5 * fi, 0.25 - 0.18 * mod(fi, 2.0)) + 0.04 * vec2(sin(t * 0.13 + fi * 2.1), cos(t * 0.11 + fi));
+    vec2 d = (uv - c) / vec2(0.32, 0.2);
+    col = mix(col, vec3(0.13, 0.19, 0.12) + 0.05 * fi, 0.75 * exp(-pow(dot(d, d), 1.4)));
+  }
+  col = mix(col, vec3(0.27, 0.22, 0.15), smoothstep(-0.27, -0.42, uv.y));
+
+  vec2 m = (uv - vec2(0.0, -0.36)) / 0.6;
+  float blur = 0.03;
+  vec4 d = mushroom(m);
+  float shadow = exp(-pow(length((m - vec2(0.08, 0.0)) / vec2(0.45, 0.06)), 2.0));
+  col *= 1.0 - 0.5 * shadow;
+
+  float side = smoothstep(-0.12, 0.14, m.x - 0.05 * m.y * m.y);
+  vec3 stem = mix(vec3(0.90, 0.87, 0.80), vec3(0.62, 0.58, 0.50), side) * mix(0.8, 1.0, smoothstep(0.0, 0.3, m.y));
+  col = mix(col, stem, 1.0 - smoothstep(-blur, blur, d.z));
+  // The skirt hangs away from the stem, so its lower edge falls into shade.
+  vec3 skirt = stem * mix(0.62, 1.02, smoothstep(0.56, 0.65, m.y));
+  col = mix(col, skirt, 1.0 - smoothstep(-blur, blur, d.w));
+  col = mix(col, vec3(0.70, 0.64, 0.53) * mix(1.0, 0.75, side), 1.0 - smoothstep(-blur, blur, d.y));
+
+  vec3 cap = mix(vec3(0.43, 0.07, 0.04), vec3(0.72, 0.20, 0.10), smoothstep(0.95, 0.82, m.y + 0.1 * m.x));
+  cap = mix(cap, vec3(0.92, 0.88, 0.80), warts(m, blur) * smoothstep(0.83, 0.88, m.y));
+  col = mix(col, cap, 1.0 - smoothstep(-blur, blur, d.x));
+  return col;
+}
+
+float segment(vec2 p, vec2 a, vec2 b, out float h) {
+  vec2 pa = p - a, ba = b - a;
+  h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+
+// A tapered brush stroke from a to b; brightness wanders along its length.
+float stroke(vec2 q, vec2 a, vec2 b, float width, float aa, float seed) {
+  float h;
+  float d = segment(q, a, b, h);
+  float w = width * (0.45 + 0.55 * sin(3.1416 * mix(0.08, 0.92, h)));
+  return (1.0 - smoothstep(w - aa, w + aa, d)) * (0.7 + 0.3 * noise(vec2(h * 4.0, seed * 31.0)));
+}
+
+// The window, reflected in the creases of one dome: two bent strokes, painted quickly.
+float glints(vec2 q, vec2 seed, float t, float aa) {
+  float g = 0.0;
+  vec2 a = vec2(0);
+  float ang = 0.0;
+  for (int k = 0; k < 4; k++) {
+    float fk = float(k);
+    float h1 = hash(seed + fk * 3.7 + 0.5);
+    float h2 = hash(seed + fk * 5.1 + 1.3);
+    float h3 = hash(seed + fk * 7.9 + 2.1);
+    // Even strokes start somewhere new; odd strokes turn sharply off the previous end.
+    if (k % 2 == 0) {
+      a = (vec2(h1, h3) - 0.5) * 0.95;
+      ang = hash(seed + fk * 9.3) * 6.2832;
+    } else {
+      ang += (h1 > 0.5 ? 1.0 : -1.0) * (1.2 + 1.0 * h3);
+    }
+    float len = k % 2 == 0 ? mix(0.25, 0.65, h2) : mix(0.0, 0.4, h2);
+    vec2 b = a + vec2(cos(ang), sin(ang)) * len;
+    b *= min(1.0, 0.76 / length(b));
+    float twinkle = 0.6 + 0.4 * sin(t * (0.4 + h1) + h2 * 6.28);
+    float weight = k < 2 ? 1.0 : 0.85;
+    g = max(g, stroke(q, a, b, mix(0.06, 0.1, h3), aa, h1 * 9.0) * twinkle * weight);
+    a = b;
+  }
+  return g * (0.7 + 0.3 * hash(seed + 21.0));
+}
+
+void main() {
+  vec2 px = gl_FragCoord.xy;
+  vec2 uv = (px - 0.5 * uResolution) / uResolution.y;
+  vec2 p = px / uPitch;
+  float t = uTime;
+  vec2 lightDir = uLight / max(length(uLight), 0.3);
+
+  ivec2 cell;
+  vec2 c = nearest(p, cell);
+  vec2 q = (p - c) / RADIUS;            // bubble-local, rim at length 1
+  float r = length(q);
+  vec2 dir = q / max(r, 1e-5);
+  vec2 seed = vec2(cell) * vec2(0.137, 0.291);
+  float inflate = inflation(cell);
+  float crumple = 1.0 - inflate;
+  float aa = fwidth(r) * 0.75;
+  float inside = 1.0 - smoothstep(0.95 - aa, 0.95 + aa, r);
+
+  // A dome magnifies the scene slightly and gathers a little light at its centre.
+  float scale = uPitch * RADIUS / uResolution.y;
+  vec2 bend = -q * scale * 0.35 * inside * inflate;
+  vec3 col = scene(uv + bend, t);
+  col = mix(col, vec3(0.80, 0.81, 0.82), 0.14 + 0.06 * (1.0 - r) * inside * inflate);
+  col *= 1.0 + 0.10 * dot(q, lightDir) * inside * inflate;
+  col *= 1.0 - 0.12 * smoothstep(0.6, 0.88, r) * inside * inflate * (0.6 - 0.4 * dot(dir, lightDir));
+
+  // The sealed edge catches light most along the light axis; the paint is thick in places, thin in others.
+  float wobble = noise(dir * 1.8 + seed * 7.0) - 0.5;
+  float ringWidth = mix(0.025, 0.09, noise(dir * 3.1 + seed * 19.0));
+  float ring = 1.0 - smoothstep(ringWidth - aa, ringWidth + aa, abs(r - 0.9 - 0.05 * wobble));
+  float broken = smoothstep(0.2, 0.55, noise(dir * 2.6 + seed * 13.0));
+  float rim = ring * (0.4 + 0.6 * abs(dot(dir, lightDir))) * mix(0.3, 1.0, broken);
+  // A second, thinner arc just inside, on the side facing the light.
+  float inner = (1.0 - smoothstep(0.02 - aa, 0.02 + aa, abs(r - 0.76 - 0.06 * wobble)))
+              * smoothstep(0.55, 0.95, dot(dir, lightDir)) * broken;
+  col = mix(col, vec3(0.94, 0.95, 0.96), max(rim * 0.85, inner * 0.6) * inflate);
+
+  // Highlights slide towards the light as it moves.
+  vec2 gq = q - uLight * 0.16;
+  float glint = glints(gq, seed, t, aa) * inside;
+  col = mix(col, vec3(0.97, 0.97, 0.96), glint * 0.92 * inflate);
+
+  // An occasional dab of colour, the way a painter mixes the room into the reflection.
+  float fleck = hash(seed + 11.0);
+  if (fleck > 0.6) {
+    vec2 a = (vec2(hash(seed + 12.1), hash(seed + 13.7)) - 0.5) * 1.1;
+    float ang = hash(seed + 14.3) * 6.2832;
+    vec3 paint = fleck > 0.8 ? vec3(0.80, 0.52, 0.40) : vec3(0.62, 0.72, 0.82);
+    col = mix(col, paint, 0.7 * stroke(gq, a, a + vec2(cos(ang), sin(ang)) * 0.1, 0.05, aa, fleck) * inside * inflate);
+  }
+
+  // A popped bubble collapses into crinkled film: a faint seam and thin creases.
+  vec2 cq = q * 2.2 + seed * 17.0;
+  float crease = (1.0 - smoothstep(0.0, 0.05, abs(noise(cq) - 0.5))) * smoothstep(0.35, 0.7, noise(cq * 0.7 + 5.0));
+  float seam = (1.0 - smoothstep(0.0, 0.08, abs(r - 0.92 - 0.05 * (noise(dir * 3.0 + seed) - 0.5)))) * broken;
+  col = mix(col, vec3(0.86, 0.87, 0.88), (0.07 * inside + 0.5 * crease * inside + 0.35 * seam) * crumple);
+
+  col += (hash(px) - 0.5) * 0.02;
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+gl.linkProgram(program);
+gl.useProgram(program);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const position = gl.getAttribLocation(program, 'position');
+gl.enableVertexAttribArray(position);
+gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+
+const uResolution = gl.getUniformLocation(program, 'uResolution');
+const uTime = gl.getUniformLocation(program, 'uTime');
+const uPitch = gl.getUniformLocation(program, 'uPitch');
+const uLight = gl.getUniformLocation(program, 'uLight');
+
+// Pop times live in a float texture, one texel per bubble.
+const texture = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, texture);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+let cols = 0, rows = 0, popped = new Float32Array(0), pitch = 1;
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio, 2);
+  canvas.width = Math.round(canvas.clientWidth * dpr);
+  canvas.height = Math.round(canvas.clientHeight * dpr);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  pitch = Math.min(canvas.width, canvas.height) / ACROSS;
+  cols = Math.ceil(canvas.width / pitch) + 2;
+  rows = Math.ceil(canvas.height / (pitch * ROW)) + 2;
+  popped = new Float32Array(cols * rows);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, cols, rows, 0, gl.RED, gl.FLOAT, popped);
+}
+
+const now = () => performance.now() / 1000;
+
+function cellAt(x, y) {
+  const px = x / pitch, py = y / pitch;
+  const r0 = Math.floor(py / ROW + 0.5);
+  let best = null, bestDist = Infinity;
+  for (let row = r0 - 1; row <= r0 + 1; row++) {
+    const offset = (((row % 2) + 2) % 2) * 0.5;
+    const col = Math.floor(px - offset + 0.5);
+    const dist = Math.hypot(px - col - offset, py - row * ROW);
+    if (dist < bestDist) { bestDist = dist; best = [col, row]; }
+  }
+  return best;
+}
+
+function pop(col, row, byUser) {
+  if (col < 0 || row < 0 || col >= cols || row >= rows) return;
+  const i = row * cols + col;
+  const t = now();
+  if (popped[i] > 0 && t - popped[i] < REFILL + REINFLATE) return;
+  popped[i] = t;
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, col, row, 1, 1, gl.RED, gl.FLOAT, popped, i);
+  if (byUser) snap();
+}
+
+// A short burst of band-passed noise sounds close enough to a pop.
+let audio;
+function snap() {
+  audio ??= new AudioContext();
+  const length = Math.floor(audio.sampleRate * 0.05);
+  const buffer = audio.createBuffer(1, length, audio.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / length) ** 5;
+  const source = new AudioBufferSourceNode(audio, { buffer });
+  const filter = new BiquadFilterNode(audio, { type: 'bandpass', frequency: 1300 + Math.random() * 1200, Q: 0.8 });
+  source.connect(filter).connect(audio.destination);
+  source.start();
+}
+
+let lastTouch = -Infinity;
+let lastHover = -Infinity;
+const pointer = [0, 0];
+const light = [-0.5, 0.55];
+
+function popAtPointer(event) {
+  const rect = canvas.getBoundingClientRect();
+  const scale = canvas.width / rect.width;
+  const cell = cellAt((event.clientX - rect.left) * scale, (rect.bottom - event.clientY) * scale);
+  pop(cell[0], cell[1], true);
+  lastTouch = now();
+}
+canvas.addEventListener('pointerdown', (event) => {
+  canvas.setPointerCapture(event.pointerId);
+  popAtPointer(event);
+});
+canvas.addEventListener('pointermove', (event) => {
+  if (event.buttons) popAtPointer(event);
+  const rect = canvas.getBoundingClientRect();
+  pointer[0] = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer[1] = 1 - ((event.clientY - rect.top) / rect.height) * 2;
+  lastHover = now();
+});
+
+// When nobody is playing, an invisible finger pops a bubble now and then.
+let nextAuto = 0;
+function autoPop(t) {
+  if (t - lastTouch < 4 || t < nextAuto) return;
+  pop(Math.floor(Math.random() * (cols - 2)), Math.floor(Math.random() * (rows - 2)), false);
+  nextAuto = t + 0.3 + Math.random() * 0.9;
+}
+
+// The light follows a hovering pointer, otherwise it wanders across the upper left.
+function moveLight(t) {
+  const hovering = t - lastHover < 3;
+  const x = hovering ? pointer[0] : -0.5 + 0.35 * Math.sin(t * 0.29);
+  const y = hovering ? pointer[1] : 0.5 + 0.25 * Math.cos(t * 0.23);
+  const ease = hovering ? 0.1 : 0.03;
+  light[0] += (x - light[0]) * ease;
+  light[1] += (y - light[1]) * ease;
+}
+
+function frame() {
+  const t = now();
+  autoPop(t);
+  moveLight(t);
+  gl.uniform2f(uResolution, canvas.width, canvas.height);
+  gl.uniform1f(uTime, t);
+  gl.uniform1f(uPitch, pitch);
+  gl.uniform2f(uLight, light[0], light[1]);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+
+new ResizeObserver(resize).observe(canvas);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day and Night</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #f3ecd0; }
+  svg { position: fixed; inset: 0; width: 100%; height: 100%; }
+  svg * { transform-box: view-box; }
+  .rim { fill: none; stroke-width: 5; }
+  .head { transform-origin: 37px -835px; }
+  .wings { transform-origin: 0 0; }
+</style>
+</head>
+<body>
+<svg viewBox="-618 -1340 1300 1560" aria-hidden="true">
+  <defs>
+    <mask id="day-mask" maskUnits="userSpaceOnUse" x="-4000" y="-4000" width="8000" height="8000">
+      <rect x="-4000" y="-4000" width="8000" height="8000" fill="white"/>
+      <circle class="night-hole" fill="black" r="0"/>
+      <circle class="day-fill" fill="white" r="0"/>
+    </mask>
+  </defs>
+  <g class="night"></g>
+  <g class="day" mask="url(#day-mask)"></g>
+  <circle class="night-hole rim" stroke="#efe6cf" r="0"/>
+  <circle class="day-fill rim" stroke="#fff1bd" r="0"/>
+</svg>
+
+<script type="module">
+const SVG = 'http://www.w3.org/2000/svg';
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const PACE = calm ? 2 : 1;
+const CYCLE = 14000 * PACE;
+const NIGHT_AT = 5000 * PACE;      // the night opens out of the pale day moon
+const DAY_AT = 11500 * PACE;       // and the day comes back out of the sun
+const SUN = [-420, -1190];
+const MOON = [440, -1230];
+const easeInOut = 'cubic-bezier(0.45, 0, 0.55, 1)';
+
+const STEM_RIGHT = [[175, 0], [153, -43], [138, -86], [127, -129], [120, -172], [115, -215], [112, -258], [110, -301], [109, -344], [108, -387], [108, -430], [108, -473], [109, -516], [110, -559], [111, -602], [112, -645], [114, -688], [116, -731], [118, -774], [120, -817], [122, -860]];
+const STEM_LEFT = [[-48, -860], [-53, -817], [-58, -774], [-62, -731], [-66, -688], [-71, -645], [-75, -602], [-79, -559], [-82, -516], [-86, -473], [-90, -430], [-93, -387], [-97, -344], [-101, -301], [-106, -258], [-111, -215], [-117, -172], [-126, -129], [-137, -86], [-153, -43], [-175, 0]];
+const SPOTS = [
+  [12, -1070, 30, 24], [202, -1050, 26, 21], [-188, -1030, 28, 22], [362, -990, 30, 24], [-348, -960, 24, 19],
+  [92, -990, 34, 27], [-88, -940, 22, 18], [252, -930, 25, 20], [472, -900, 20, 16], [-438, -880, 18, 14],
+  [-248, -890, 26, 21], [132, -880, 20, 16], [372, -875, 17, 14], [-28, -880, 16, 13],
+];
+const FLOWERS = [[-540, 40], [-470, 70], [-380, 30], [-300, 80], [330, 60], [410, 25], [500, 75], [600, 40]];
+
+const DAY = {
+  name: 'day', sky: ['#8fc6db', '#f3ecd0'], far: '#9cc49a', near: '#74a65d', ground: '#5f904b',
+  stem: '#e8e2d2', stemShade: '#cbbfa6', ring: '#ddd5c2', gills: '#d2c6ad', gillLine: '#b5a789',
+  cap: ['#b8321a', '#6e130b'], warts: '#efe7d6', shadow: '#2f5a2c', shadowX: 70, light: 'left',
+};
+const NIGHT = {
+  name: 'night', sky: ['#0c1a31', '#27496a'], far: '#1f3c50', near: '#173141', ground: '#112833',
+  stem: '#8e9db1', stemShade: '#606f86', ring: '#7f8da3', gills: '#6c7588', gillLine: '#525a6d',
+  cap: ['#5e2030', '#2e0f1c'], warts: '#aab7c8', shadow: '#050e17', shadowX: -40, light: 'right',
+};
+
+let seed = 83;
+function random() {
+  seed = (seed * 16807) % 2147483647;
+  return seed / 2147483647;
+}
+
+function draw(parent, tag, attributes = {}) {
+  const element = document.createElementNS(SVG, tag);
+  for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+  parent.append(element);
+  return element;
+}
+
+function polygon(points) {
+  return `M${points.map((point) => point.join(' ')).join(' L')} Z`;
+}
+
+function verticalGradient(id, [top, bottom], y1, y2, bottomOpacity = 1) {
+  const gradient = draw(document.querySelector('defs'), 'linearGradient', { id, gradientUnits: 'userSpaceOnUse', x1: 0, y1, x2: 0, y2 });
+  draw(gradient, 'stop', { offset: 0, 'stop-color': top });
+  draw(gradient, 'stop', { offset: 1, 'stop-color': bottom, 'stop-opacity': bottomOpacity });
+  return `url(#${id})`;
+}
+
+function landscape(layer, palette) {
+  draw(layer, 'rect', { x: -4000, y: -4000, width: 8000, height: 8000, fill: verticalGradient(`${palette.name}-sky`, palette.sky, -1500, -100) });
+  draw(layer, 'path', { fill: palette.far, d: 'M-3000 -160 Q-1800 -420 -900 -230 Q-400 -130 0 -210 Q500 -330 1000 -190 Q1800 -60 3000 -200 V300 H-3000 Z' });
+  draw(layer, 'path', { fill: palette.near, d: 'M-3000 -60 Q-1200 -200 -500 -90 Q100 0 700 -110 Q1400 -200 3000 -80 V300 H-3000 Z' });
+  draw(layer, 'path', { fill: palette.ground, d: 'M-3000 -20 Q-1500 -60 0 -8 Q1500 40 3000 -30 V3000 H-3000 Z' });
+  const trees = [[-760, -250, 60], [-690, -262, 44], [820, -232, 54], [880, -222, 40], [-230, -190, 36]];
+  for (const [x, y, r] of trees) {
+    draw(layer, 'path', { fill: palette.near, d: `M${x - 5} ${y + r * 1.4} L${x - 3} ${y} L${x + 3} ${y} L${x + 5} ${y + r * 1.4} Z` });
+    draw(layer, 'ellipse', { cx: x, cy: y, rx: r * 0.8, ry: r, fill: palette.near });
+  }
+  const tufts = [-600, -420, -250, 260, 450, 640, -900, 900].map((x) => {
+    const y = 120 + (x % 7) * 6;
+    return `M${x - 30} ${y} q10 -40 4 -70 M${x - 10} ${y} q4 -50 18 -90 M${x + 6} ${y} q14 -30 40 -50`;
+  }).join(' ');
+  draw(layer, 'path', { d: tufts, stroke: palette.near, 'stroke-width': 8, 'stroke-linecap': 'round', fill: 'none' });
+}
+
+// One mushroom, lit from the sun on the left by day and from the moon on the right by night.
+function mushroom(layer, palette) {
+  const lit = palette.light === 'left';
+  draw(layer, 'ellipse', { cx: palette.shadowX, cy: 4, rx: 300, ry: 30, fill: palette.shadow, opacity: lit ? 0.35 : 0.5 });
+  draw(layer, 'path', { fill: palette.stem, d: polygon([...STEM_RIGHT, ...STEM_LEFT]) });
+  const shade = lit ? [...STEM_RIGHT, [84, -860], [70, -430], [112, 0]] : [...STEM_LEFT, [-112, 0], [-62, -430], [-12, -860]];
+  draw(layer, 'path', { fill: palette.stemShade, d: polygon(shade) });
+  const fibres = [-30, 10, 50, 90].map((x, i) => `M${x - 20 + i * 4} -40 Q${x * 0.8} -400 ${x * 0.7 + 10} -760`).join(' ');
+  draw(layer, 'path', { d: fibres, stroke: palette.stemShade, 'stroke-width': 4, fill: 'none', opacity: 0.3 });
+  const underCap = verticalGradient(`${palette.name}-under-cap`, [palette.shadow, palette.shadow], -860, -720, 0);
+  draw(layer, 'path', { fill: underCap, opacity: 0.5, d: 'M-48 -860 L122 -860 L115 -720 L-62 -720 Z' });
+  draw(layer, 'path', { fill: palette.ring, d: 'M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Q-80 -540 -50 -552 Q-10 -538 30 -550 Q70 -536 105 -550 Q125 -542 145 -555 Z' });
+  draw(layer, 'path', { fill: palette.stemShade, d: lit ? 'M145 -555 L132 -605 L119 -655 L95 -655 L104 -555 Z' : 'M-114 -555 L-95 -605 L-76 -655 L-50 -655 L-70 -555 Z' });
+
+  const head = draw(layer, 'g', { class: 'head' });
+  draw(head, 'path', { fill: palette.gills, d: 'M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z' });
+  const gills = Array.from({ length: 22 }, (_, i) => {
+    const x = -470 + i * 45;
+    return `M${x} -806 L${32 + (x - 32) * 0.94} -834`;
+  }).join(' ');
+  draw(head, 'path', { d: gills, stroke: palette.gillLine, 'stroke-width': 3, fill: 'none' });
+  draw(head, 'path', { fill: verticalGradient(`${palette.name}-cap`, palette.cap, -830, -1130), d: 'M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z' });
+  const sheen = lit
+    ? { d: 'M-400 -980 Q-260 -1080 -40 -1108', stroke: '#ffd9b8', 'stroke-width': 22, opacity: 0.3 }
+    : { d: 'M300 -1062 Q470 -1000 560 -880', stroke: '#c9d8ea', 'stroke-width': 12, opacity: 0.5 };
+  draw(head, 'path', { ...sheen, fill: 'none', 'stroke-linecap': 'round' });
+  for (const [cx, cy, rx, ry] of SPOTS) {
+    draw(head, 'ellipse', { cx: cx + (lit ? 5 : -5), cy: cy + 6, rx, ry, fill: palette.cap[1], opacity: 0.6 });
+    draw(head, 'ellipse', { cx, cy, rx, ry, fill: palette.warts });
+  }
+  return head;
+}
+
+function daisy(layer, [x, y]) {
+  draw(layer, 'path', { d: `M${x} ${y} q-6 -40 4 -70`, stroke: '#3f6e36', 'stroke-width': 5, fill: 'none' });
+  for (let k = 0; k < 8; k++) {
+    draw(layer, 'ellipse', { cx: x + 4, cy: y - 86, rx: 6, ry: 16, fill: '#fbf8ee', transform: `rotate(${k * 45} ${x + 4} ${y - 70})` });
+  }
+  draw(layer, 'circle', { cx: x + 4, cy: y - 70, r: 9, fill: '#f0c043' });
+}
+
+// At night the daisies have folded shut.
+function bud(layer, [x, y]) {
+  draw(layer, 'path', { d: `M${x} ${y} q-6 -40 4 -70`, stroke: '#24443c', 'stroke-width': 5, fill: 'none' });
+  draw(layer, 'path', { d: `M${x + 4} ${y - 70} q-10 -10 0 -30 q10 20 0 30 Z`, fill: '#9aa8b8' });
+}
+
+function sun(layer) {
+  const [cx, cy] = SUN;
+  draw(layer, 'circle', { cx, cy, r: 120, fill: '#fff6d2', opacity: 0.35 });
+  draw(layer, 'circle', { cx, cy, r: 74, fill: '#fff3c4' });
+}
+
+function moon(layer, bright) {
+  const [cx, cy] = MOON;
+  const group = draw(layer, 'g', { opacity: bright ? 1 : 0.5 });
+  if (bright) draw(group, 'circle', { cx, cy, r: 120, fill: '#efe6cf', opacity: 0.08 });
+  draw(group, 'circle', { cx, cy, r: 56, fill: bright ? '#f1ead6' : '#f4f8fa' });
+  for (const [dx, dy, r] of [[-18, -14, 12], [16, 10, 9], [-6, 24, 6], [22, -20, 5]]) {
+    draw(group, 'circle', { cx: cx + dx, cy: cy + dy, r, fill: bright ? '#d8cfb6' : '#d7e3ea' });
+  }
+  return group;
+}
+
+function cloud(layer, x, y, scale) {
+  const group = draw(layer, 'g', { transform: `translate(${x} ${y}) scale(${scale})` });
+  const drift = draw(group, 'g');
+  draw(drift, 'path', { fill: '#fbf7ea', d: 'M-170 0 Q-170 -50 -110 -50 Q-90 -110 -20 -100 Q30 -150 90 -100 Q160 -100 160 -40 Q200 -30 190 0 Z' });
+  return drift;
+}
+
+function butterfly(layer) {
+  const flight = draw(layer, 'g');
+  const wings = draw(flight, 'g', { class: 'wings' });
+  draw(wings, 'path', { fill: '#fbf8ee', d: 'M0 0 Q-34 -40 -30 -10 Q-34 12 0 2 Q34 12 30 -10 Q34 -40 0 0 Z' });
+  draw(wings, 'circle', { cx: -18, cy: -18, r: 4, fill: '#5d5a52' });
+  draw(wings, 'circle', { cx: 18, cy: -18, r: 4, fill: '#5d5a52' });
+  draw(flight, 'path', { d: 'M0 -8 L0 10', stroke: '#3a3830', 'stroke-width': 4, 'stroke-linecap': 'round' });
+  return { flight, wings };
+}
+
+function stars(layer) {
+  const twinkles = [];
+  for (let i = 0; i < 70; i++) {
+    const x = -1400 + 2800 * random(), y = -1700 + 1350 * random(), r = 2 + 3 * random() ** 3;
+    twinkles.push(draw(layer, 'circle', { cx: x, cy: y, r, fill: '#f1ead6', opacity: 0.4 + 0.5 * random() }));
+  }
+  return twinkles;
+}
+
+function firefly(layer) {
+  const group = draw(layer, 'g');
+  draw(group, 'circle', { r: 26, fill: '#e6f29a', opacity: 0.22 });
+  draw(group, 'circle', { r: 8, fill: '#f4f9cc' });
+  return group;
+}
+
+// Keyframes for a timeline that repeats every CYCLE, with times in milliseconds.
+function at(time, frame) {
+  return { offset: time / CYCLE, ...frame };
+}
+
+// A circle opens on a small disc, takes a breath in, then sweeps out over the whole scene.
+function wipe(selector, start) {
+  const frames = [
+    at(0, { r: 0 }),
+    at(start, { r: 0, easing: 'cubic-bezier(0.3, 0, 0.3, 1)' }),
+    at(start + 450 * PACE, { r: 104, easing: easeInOut }),
+    at(start + 800 * PACE, { r: 90, easing: 'cubic-bezier(0.6, 0, 0.35, 1)' }),
+    at(start + 2300 * PACE, { r: 2600 }),
+    at(CYCLE, { r: 2600 }),
+  ];
+  for (const circle of document.querySelectorAll(selector)) circle.animate(frames, { duration: CYCLE, iterations: Infinity });
+}
+
+function placeWipes() {
+  for (const circle of document.querySelectorAll('.night-hole')) circle.setAttribute('cx', MOON[0]), circle.setAttribute('cy', MOON[1]);
+  for (const circle of document.querySelectorAll('.day-fill')) circle.setAttribute('cx', SUN[0]), circle.setAttribute('cy', SUN[1]);
+  wipe('.night-hole', NIGHT_AT);
+  wipe('.day-fill', DAY_AT);
+}
+
+// Day motion runs on a timeline that starts when the day returns, so it can reset unseen at night.
+function dayTiming(duration = CYCLE) {
+  return { duration, delay: DAY_AT - CYCLE, iterations: Infinity };
+}
+
+function animateDay(layer, head, dayMoon, clouds) {
+  const daylight = CYCLE - DAY_AT + NIGHT_AT + 1500 * PACE;
+  dayMoon.animate([
+    at(0, { opacity: 0.5 }),
+    at(NIGHT_AT - 900 * PACE, { opacity: 0.5, easing: easeInOut }),
+    at(NIGHT_AT, { opacity: 1 }),
+    at(NIGHT_AT + 2400 * PACE, { opacity: 1 }),
+    at(NIGHT_AT + 2500 * PACE, { opacity: 0.5 }),
+    at(CYCLE, { opacity: 0.5 }),
+  ], { duration: CYCLE, iterations: Infinity });
+  clouds.forEach((drift, i) => drift.animate([
+    { offset: 0, translate: '0 0' },
+    { offset: daylight / CYCLE, translate: `${180 + 60 * i}px 0` },
+    { offset: 1, translate: `${180 + 60 * i}px 0` },
+  ], dayTiming()));
+  if (calm) return;
+  head.animate([
+    { rotate: '0deg' }, { rotate: '-0.8deg' }, { rotate: '0.4deg' }, { rotate: '0deg' },
+  ], { duration: 5200, iterations: Infinity, easing: easeInOut });
+  const { flight, wings } = butterfly(layer);
+  const route = [[-700, -300], [-460, -560], [-560, -700], [-300, -760], [-250, -500], [-420, -380], [-650, -460], [-700, -300]];
+  flight.animate(route.map(([x, y], i) => ({ translate: `${x}px ${y}px`, rotate: `${(i % 2 ? 10 : -12)}deg`, easing: easeInOut })), { duration: 9000, iterations: Infinity });
+  wings.animate([{ scale: '1 1' }, { scale: '0.25 1' }], { duration: 170, iterations: Infinity, direction: 'alternate', easing: easeInOut });
+}
+
+// Asleep: the cap has sunk a little and rises and falls with slow breaths.
+function animateNight(layer, head, twinkles) {
+  head.style.translate = '0 20px';
+  head.style.rotate = '-5deg';
+  if (calm) return;
+  head.animate([
+    { translate: '0 20px', rotate: '-5deg' },
+    { translate: '0 8px', rotate: '-3.6deg' },
+  ], { duration: 2600, iterations: Infinity, direction: 'alternate', easing: easeInOut });
+  for (const star of twinkles) {
+    star.animate([{ opacity: star.getAttribute('opacity') }, { opacity: 0.15 }], {
+      duration: 900 + 2600 * random(), delay: -4000 * random(), iterations: Infinity, direction: 'alternate', easing: easeInOut,
+    });
+  }
+  for (let i = 0; i < 7; i++) {
+    const fly = firefly(layer);
+    const home = [-560 + 1200 * random(), -420 + 360 * random()];
+    const wander = Array.from({ length: 5 }, () => [home[0] + 220 * (random() - 0.5), home[1] + 160 * (random() - 0.5)]);
+    fly.animate([...wander, wander[0]].map(([x, y]) => ({ translate: `${x}px ${y}px` })), {
+      duration: 7000 + 4000 * random(), iterations: Infinity, easing: easeInOut,
+    });
+    fly.animate([{ opacity: 0.1 }, { opacity: 0.1, offset: 0.55 }, { opacity: 1, offset: 0.7 }, { opacity: 0.1 }], {
+      duration: 2200 + 1800 * random(), delay: -3000 * random(), iterations: Infinity, easing: easeInOut,
+    });
+  }
+}
+
+function build() {
+  const night = document.querySelector('.night'), day = document.querySelector('.day');
+  landscape(night, NIGHT);
+  const twinkles = stars(night);
+  moon(night, true);
+  for (const place of FLOWERS) bud(night, place);
+  const nightHead = mushroom(night, NIGHT);
+
+  landscape(day, DAY);
+  sun(day);
+  const dayMoon = moon(day, false);
+  const clouds = [cloud(day, -900, -1080, 1), cloud(day, 150, -1235, 0.6)];
+  for (const place of FLOWERS) daisy(day, place);
+  const dayHead = mushroom(day, DAY);
+
+  animateNight(night, nightHead, twinkles);
+  animateDay(day, dayHead, dayMoon, clouds);
+  placeWipes();
+}
+
+build();
+</script>
+</body>
+</html>

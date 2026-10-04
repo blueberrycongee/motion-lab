@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Typewriter</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: linear-gradient(100deg, #5b4535, #4a372a 55%, #3e2e24); }
+  .feed { position: fixed; left: 0; right: 0; top: 0; overflow: hidden; }
+  .sheet {
+    position: absolute; top: 0;
+    background: linear-gradient(90deg, #e6dfd0, #f4efe3 6% 94%, #e4ddce);
+    box-shadow: 0 0 0.8em #0006;
+    font: 700 1px 'Courier New', Courier, ui-monospace, monospace;
+  }
+  .text { position: absolute; left: 0; top: 0; }
+  .char { position: absolute; left: 0; top: 0; line-height: 1; visibility: hidden; }
+  /* The platen: a black rubber roller the paper wraps round, ribbed so line feeds show. */
+  .platen {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    background:
+      repeating-linear-gradient(#0000 0 3px, #ffffff08 3px 4px) 0 var(--turn) / 100% 8px,
+      linear-gradient(#141412, #3a3a36 30%, #22221f 60%, #0b0b0a);
+  }
+  /* The carrier rides in front of the platen; its ribbon lifts to the print point on each stroke. */
+  .carrier { position: fixed; left: 0; top: 0; width: 0; height: 0; }
+  .carrier::before {
+    content: ''; position: absolute; left: -1.6em; top: 1.25em; width: 3.8em; height: 2.4em;
+    border-radius: 0.35em 0.35em 0.2em 0.2em;
+    background: linear-gradient(#8d8f88, #5d5f59 30%, #3d3e3a);
+    box-shadow: 0 0.3em 0.5em #0007;
+  }
+  .carrier::after {
+    content: ''; position: absolute; left: -0.25em; top: 0.25em; width: 0.08em; height: 1em;
+    background: #8b8c8488; box-shadow: 0.62em 0 #8b8c8488;
+  }
+  .ribbon {
+    position: absolute; left: -0.45em; top: 0.85em; width: 1.5em; height: 0.5em;
+    background: linear-gradient(#1d1b19 50%, #a82718 50%);
+  }
+</style>
+</head>
+<body>
+<div class="feed"><div class="sheet"><div class="text"></div></div></div>
+<div class="platen"></div>
+<div class="carrier"><div class="ribbon"></div></div>
+<script type="module">
+const ROWS = 19, COLS = 33;
+const CELL_H = 1.17 / ROWS, CELL_W = CELL_H * 0.6;   // mushroom units per character cell
+const FEED_IN = 1, START = 1.15;                    // the sheet is wound in, then typing starts
+const DENSITY = 'xX%&8#M@';
+const INK = '1f1c19', RED = 'ad2718';
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// The canonical profile, sampled in mushroom units: y up, ground at 0, cap about 1.12 wide.
+const SPOTS = [
+  [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+  [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+  [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+  [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+];
+
+function ellipse(px, py, rx, ry) {
+  const k0 = Math.hypot(px / rx, py / ry);
+  const k1 = Math.hypot(px / (rx * rx), py / (ry * ry));
+  return k0 * (k0 - 1) / k1;
+}
+
+function partAt(x0, y) {
+  const x = x0 - 0.05 * y * y;
+  const r = Math.abs(x);
+  const under = 0.82 + 0.02 * (1 - Math.min(r * r / 0.3125, 1));
+  if (Math.max(ellipse(x, y - 0.8, 0.56, 0.31), under - y) < 0) {
+    // Only the larger warts are kept, opened up so each leaves a round hole a few characters across.
+    const onSpot = SPOTS.some(([sx, sy, sr]) => sr >= 0.024 && Math.hypot(x0 - 0.032 - sx, y - sy) < sr * 1.6);
+    return onSpot ? 'spot' : 'cap';
+  }
+  // The gill band is thinner than a line, so it claims the whole line beneath the cap.
+  const gillTop = 0.8 + 0.015 * (1 - Math.min(r * r / 0.27, 1)) - CELL_H * 0.5;
+  if (Math.max(r - 0.55, y - under, gillTop - y) < 0) return 'gills';
+  if (Math.max(r - 0.096 - (0.66 - y) * 0.32, Math.abs(y - 0.605) - 0.05) < 0) return 'ring';
+  const stemR = 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  if (Math.max(r - stemR, Math.abs(y - 0.43) - 0.43) < 0) return 'stem';
+  return null;
+}
+
+const random = (a, b) => a + Math.random() * (b - a);
+const pick = (chars) => chars[Math.floor(Math.random() * chars.length)];
+
+// The typed character for one cell, and whether it takes the red half of the ribbon.
+// Warts are left as bare paper; the crown is struck densest, lit from the upper left,
+// and the stem is drawn as an outline shaded down its right side.
+function keyAt(col, row) {
+  const x = (col + 0.5 - COLS / 2) * CELL_W + 0.03;
+  const y = 1.13 - (row + 0.5) * CELL_H;
+  const part = partAt(x, y);
+  if (part === 'cap') {
+    const axis = 0.56 * Math.sqrt(Math.max(0, 1 - ((y - 0.8) / 0.31) ** 2));
+    const nx = (x - 0.05 * y * y) / 0.56, ny = (y - 0.8) / 0.31;
+    const lit = -0.45 * nx + 0.55 * ny + 0.7 * Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+    const dense = 0.6 * (1 - axis / 0.56) + 0.4 * (1 - lit);
+    return [DENSITY[Math.round(Math.min(1, Math.max(0, dense * 1.3)) * (DENSITY.length - 1))], true];
+  }
+  if (part === 'gills') return ['|', false];
+  if (part === 'ring') return ['=', false];
+  if (part === 'stem') {
+    if (partAt(x - CELL_W, y) !== 'stem') return ['(', false];
+    if (partAt(x + CELL_W, y) !== 'stem') return [')', false];
+    return [partAt(x + 2 * CELL_W, y) !== 'stem' ? ':' : ' ', false];
+  }
+  if (row === ROWS - 1 && Math.abs(x) < 0.75 && Math.random() < 0.7 - Math.abs(x)) return [pick('___,.'), false];
+  if (row === ROWS - 2 && Math.abs(x) > 0.15 && Math.abs(x) < 0.45 && Math.random() < 0.35) return [pick('"\'`'), false];
+  return [' ', false];
+}
+
+const sheet = document.querySelector('.sheet');
+const text = document.querySelector('.text');
+const keys = [];   // struck characters, in typing order
+const crs = [];    // carriage returns
+const events = []; // everything that moves the carrier, in time order
+let t = START;
+
+// Write the typing script: uneven keystrokes, quick spaces, a tab to the first character
+// of each line, and a carriage return at its end.
+for (let row = 0; row < ROWS; row++) {
+  const line = Array.from({ length: COLS }, (_, col) => keyAt(col, row));
+  const first = line.findIndex(([char]) => char !== ' ');
+  const last = COLS - 1 - [...line].reverse().findIndex(([char]) => char !== ' ');
+  let col = 0;
+  if (first > 0) {
+    events.push({ time: t, type: 'tab', from: 0, to: first });
+    t += 0.06 + first * 0.003;
+    col = first;
+  }
+  let previous = null;
+  for (; first >= 0 && col <= last; col++) {
+    const [char, red] = line[col];
+    events.push({ time: t, type: 'key', col });
+    if (char === ' ') {
+      t += random(0.02, 0.03);
+      continue;
+    }
+    keys.push(makeKey(char, red, row, col, t));
+    t += char === previous ? random(0.028, 0.04) : 0.032 + 0.045 * Math.random() ** 2;
+    if (Math.random() < 0.02) t += random(0.12, 0.3);
+    previous = char;
+  }
+  const sweep = 0.08 + 0.12 * col / COLS;
+  const cr = { time: t, type: 'cr', from: col, sweep, row };
+  events.push(cr);
+  crs.push(cr);
+  t += sweep + random(0.05, 0.1);
+}
+const TYPED = t, FEED_OUT = t + 2, CYCLE = FEED_OUT + 1.6;
+
+// Each strike lands a little differently: off the baseline, slightly turned,
+// and with more or less ink depending on the ribbon and the force of the key.
+function makeKey(char, red, row, col, time) {
+  const el = document.createElement('span');
+  el.className = 'char';
+  el.textContent = char;
+  const ink = random(0.62, 1);
+  el.style.color = `#${red ? RED : INK}`;
+  el.style.opacity = ink.toFixed(2);
+  if (ink > 0.93) el.style.textShadow = '0 0 0.04em currentColor';
+  const dx = random(-0.04, 0.04), dy = random(-0.06, 0.06) + Math.sin(row * 1.7) * 0.025;
+  el.style.transform = `translate(${col * 0.6 + dx}em, ${row + dy}em) rotate(${random(-2, 2).toFixed(1)}deg)`;
+  text.append(el);
+  return { el, time, red, col, row };
+}
+
+const smooth = (p) => (p <= 0 ? 0 : p >= 1 ? 1 : p * p * (3 - 2 * p));
+
+// The latest event at or before `time`, found by bisection.
+function lastEvent(list, time) {
+  let lo = 0, hi = list.length - 1, found = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (list[mid].time <= time) {
+      found = list[mid];
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  return found;
+}
+
+// The carrier's column: the escapement steps it on just after each strike, a tab throws
+// it along, and the return sweeps it back to bang against the margin stop.
+function carrierAt(c) {
+  const e = lastEvent(events, c);
+  if (!e) return 0;
+  const s = c - e.time;
+  if (e.type === 'key') return e.col + smooth((s - 0.012) / 0.03);
+  if (e.type === 'tab') return e.from + (e.to - e.from) * smooth(s / (0.06 + e.to * 0.003));
+  const p = s / e.sweep;
+  if (p < 1) return e.from * (1 - p * p * (3 - 2 * p));
+  return 0.25 * Math.exp(-18 * (s - e.sweep)) * Math.abs(Math.sin(30 * (s - e.sweep)));
+}
+
+const feed = document.querySelector('.feed');
+const platen = document.querySelector('.platen');
+const carrier = document.querySelector('.carrier');
+const ribbon = document.querySelector('.ribbon');
+let cell, printY, artLeft, top;
+
+// How many lines the platen has turned the sheet past the print line. The sheet is wound
+// in until its first line reaches the print line, and pulled out upward once the art is done.
+function feedAt(c) {
+  if (c < FEED_IN) return -(top + 2) * (1 - smooth(c / FEED_IN));
+  if (c >= FEED_OUT) return ROWS + (top + 6) * ((c - FEED_OUT) / 1.6) ** 2;
+  const cr = lastEvent(crs, c);
+  return cr ? cr.row + smooth((c - cr.time) / 0.14) : 0;
+}
+
+// A close view: the page fills the frame and only a sliver of the platen shows beneath it.
+function resize() {
+  cell = Math.min(innerHeight * 0.6 / ROWS, innerWidth * 0.84 / (COLS * 0.6));
+  printY = innerHeight - cell * 2.4;
+  artLeft = innerWidth / 2 - COLS * 0.3 * cell - 0.05 * cell;
+  // The top margin is as tall as the frame, so the page starts out filling it.
+  top = Math.ceil(printY / cell) + 1;
+  const sheetLeft = innerWidth * 0.04;
+  sheet.style.fontSize = carrier.style.fontSize = `${cell}px`;
+  sheet.style.left = `${sheetLeft}px`;
+  sheet.style.width = `${innerWidth * 0.92}px`;
+  sheet.style.height = `${top + ROWS + 4}em`;
+  text.style.transform = `translate(${(artLeft - sheetLeft) / cell}em, ${top}em)`;
+  const platenTop = printY + cell * 1.15;
+  feed.style.height = `${platenTop + cell * 1.2}px`;
+  platen.style.top = `${platenTop}px`;
+}
+addEventListener('resize', resize);
+resize();
+
+let shown = 0;
+function show(c) {
+  if (c < (keys[shown - 1]?.time ?? 0)) {
+    for (const key of keys) key.el.style.visibility = 'hidden';
+    shown = 0;
+  }
+  while (shown < keys.length && keys[shown].time <= c) keys[shown++].el.style.visibility = 'visible';
+}
+
+// The calm version keeps the sheet still and lets each line appear whole.
+function calmFrame(c) {
+  const row = (c - START) / (TYPED - START) * ROWS;
+  const fade = 1 - smooth((c - FEED_OUT) / 1.5);
+  for (const key of keys) key.el.style.visibility = key.row < row ? 'visible' : 'hidden';
+  sheet.style.opacity = fade.toFixed(3);
+  sheet.style.transform = `translateY(${(printY - (top + ROWS) * cell).toFixed(1)}px)`;
+  carrier.style.visibility = 'hidden';
+}
+
+function frame(ms) {
+  const c = (ms / 1000) % CYCLE;
+  if (calm) {
+    calmFrame(c);
+    requestAnimationFrame(frame);
+    return;
+  }
+  show(c);
+  const lines = feedAt(c);
+  sheet.style.transform = `translateY(${(printY - (top + lines) * cell).toFixed(1)}px)`;
+  platen.style.setProperty('--turn', `${(lines * cell * 0.9).toFixed(1)}px`);
+  const col = carrierAt(c);
+  carrier.style.transform = `translate(${(artLeft + (col + 0.3) * 0.6 * cell).toFixed(1)}px, ${printY.toFixed(1)}px)`;
+  // The ribbon flicks up into the print point for an instant on every stroke.
+  const key = keys[shown - 1];
+  const since = key ? c - key.time : 1;
+  const lift = since < 0.07 ? Math.sin(Math.PI * since / 0.07) : 0;
+  ribbon.style.transform = `translateY(${(-0.55 * lift - (key?.red ? 0.25 : 0)).toFixed(3)}em)`;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tilt</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: radial-gradient(85% 75% at 46% 40%, #c9a65d, #9c7937 58%, #5f4620);
+    perspective: calc(5.5 * var(--a));
+    touch-action: none;
+  }
+  .scene { position: absolute; left: 50%; top: 50%; transform-style: preserve-3d; }
+  .scene div { position: absolute; transform-style: preserve-3d; }
+  .card, .wall-shadow {
+    left: calc(-0.7 * var(--a)); top: calc(-0.84 * var(--a));
+    width: calc(1.4 * var(--a)); height: calc(1.68 * var(--a));
+  }
+  .scene svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+  .scene .shadow { inset: 0; filter: brightness(0) blur(calc(0.016 * var(--a))); opacity: 0.22; will-change: transform; }
+  .wall-shadow {
+    border-radius: calc(0.03 * var(--a));
+    background: rgb(52 34 12 / 0.5);
+    filter: blur(calc(0.05 * var(--a)));
+  }
+  .sheet { inset: 0; }
+  .edge { backface-visibility: hidden; }
+  .edge::after { content: ''; position: absolute; inset: 0; background: rgb(28 20 10 / var(--dim, 0)); }
+  .sheen {
+    inset: 0;
+    border-radius: calc(0.026 * var(--a));
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position: absolute">
+  <defs>
+    <radialGradient id="cap" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6e130b"/>
+      <stop offset="1" stop-color="#b8321a"/>
+    </radialGradient>
+    <linearGradient id="stem-print" x1="-150" x2="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f4f0e4"/>
+      <stop offset="1" stop-color="#d6cdb8"/>
+    </linearGradient>
+    <linearGradient id="sky" y1="-1350" y2="330" x1="0" x2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e2e4d2"/>
+      <stop offset="1" stop-color="#c3cdb0"/>
+    </linearGradient>
+    <!-- Paper fibre, clipped to whatever shape it is drawn with. -->
+    <filter id="grain" x="0" y="0" width="1" height="1">
+      <feTurbulence type="fractalNoise" baseFrequency="0.7" numOctaves="2" seed="4"/>
+      <feColorMatrix values="0 0 0 0 0.36  0 0 0 0 0.3  0 0 0 0 0.2  0.55 0 0 0 -0.2"/>
+      <feComposite in2="SourceGraphic" operator="in"/>
+    </filter>
+    <path id="stem" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+    <path id="gills" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+    <path id="cap-shape" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+    <g id="spots">
+      <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+      <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+      <ellipse cx="-188" cy="-1030" rx="28" ry="22"/>
+      <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+      <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+      <ellipse cx="92" cy="-990" rx="34" ry="27"/>
+      <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+      <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+      <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+      <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+      <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+      <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+      <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+      <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+    </g>
+  </defs>
+</svg>
+<div class="scene"><div class="wall-shadow"></div><div class="card"></div></div>
+<script type="module">
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const clamp01 = (v) => Math.min(Math.max(v, 0), 1);
+const ease = (v) => v * v * (3 - 2 * v);
+const mix = (a, b, k) => a + (b - a) * k;
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const normalize = (v) => v.map((c) => c / Math.hypot(...v));
+
+// CSS axes: y points down, z towards the viewer.
+const LIGHT = normalize([-0.45, -0.55, 0.7]);
+const SHEEN = normalize([LIGHT[0], LIGHT[1], LIGHT[2] + 2]);
+const MAX_TILT = calm ? 0.15 : 0.3;
+const PAPER = 8;
+const WALL = -0.45;
+// The art is drawn in a 1400 x 1680 card; the mushroom keeps its canonical units at 0.88 scale.
+const BOX = '-700 -1350 1400 1680';
+const MUSHROOM = 'scale(0.88)';
+
+// ---- Sheets of cut paper, back to front; depths in art units ----
+
+function outline() {
+  const r = 26;
+  return `M${-700 + r} -1350 H${700 - r} A${r} ${r} 0 0 1 700 ${-1350 + r} V${330 - r} A${r} ${r} 0 0 1 ${700 - r} 330
+    H${-700 + r} A${r} ${r} 0 0 1 -700 ${330 - r} V${-1350 + r} A${r} ${r} 0 0 1 ${-700 + r} -1350 Z`;
+}
+
+// An arched window; deeper sheets have smaller windows, so the frame steps down into the card.
+function windowPath(grow) {
+  const half = 600 + grow, bottom = 230 + grow;
+  return `M${-half} ${bottom} V-650 A${half} ${half} 0 0 1 ${half} -650 V${bottom} Z`;
+}
+
+// Four tiers of boughs; the outline runs down the right side and back up the left.
+function conifer(x, height, width) {
+  const tiers = [3, 2, 1, 0].map((i) => ({ y: -60 - (height * i) / 4, reach: width * (1 - i / 4.6) }));
+  const right = tiers.map(({ y, reach }) => `L${x + reach * 0.45} ${y - height * 0.12} L${x + reach} ${y}`);
+  const left = tiers.reverse().map(({ y, reach }) => `L${x - reach} ${y} L${x - reach * 0.45} ${y - height * 0.12}`);
+  return `M${x} ${-60 - height * 1.08} ${right.join(' ')} ${left.join(' ')} Z`;
+}
+
+function trees() {
+  const row = [[-640, 330], [-520, 470], [-380, 300], [-250, 420], [300, 360], [430, 500], [560, 330], [680, 420]];
+  return `<circle cx="330" cy="-1000" r="150" fill="#eeead8"/>
+    <path fill="#a2af8c" d="${row.map(([x, h]) => conifer(x, h, h * 0.3)).join(' ')} M-700 330 V-60 H700 V330 Z"/>`;
+}
+
+function hill() {
+  return `<path fill="#7d8a56" d="M-700 330 V-150 C-450 -170 -330 -60 -80 -70 C160 -80 330 -140 700 -60 V330 Z"/>
+    <path fill="#6f7c4b" d="M-700 330 V-20 C-300 -40 300 10 700 -10 V330 Z"/>`;
+}
+
+function skirt() {
+  let hem = '';
+  for (let i = 1; i <= 6; i++) {
+    const x = mix(152, -122, i / 6);
+    hem += `Q${(x + 23).toFixed(0)} -526 ${x.toFixed(0)} -548 `;
+  }
+  return `<path transform="${MUSHROOM}" fill="#ddd5c2" d="M-76 -655 L119 -655 Q130 -610 152 -548 ${hem}Q-100 -610 -76 -655 Z"/>`;
+}
+
+function grass() {
+  let blades = '';
+  for (let i = 0; i < 72; i++) {
+    const x = -700 + i * 20 + ((i * 37) % 13);
+    const height = 45 + ((i * 53) % 50) + 30 * Math.sin(i * 0.7) ** 2;
+    const lean = ((i * 29) % 30) - 15;
+    blades += `M${x - 9} 40 Q${x + lean * 0.5} ${40 - height * 0.6} ${x + lean} ${40 - height} Q${x + 4} ${40 - height * 0.5} ${x + 9} 40 Z `;
+  }
+  return `<path fill="#55633a" d="${blades} M-700 330 V40 C-300 20 260 55 700 30 V330 Z"/>`;
+}
+
+const SHEETS = [
+  { z: 0, paper: 'url(#sky)', art: trees },
+  { z: 45, paper: '#d8ceb6', art: hill },
+  { z: 90, paper: '#ddd3bc', art: () => `<use href="#stem" transform="${MUSHROOM}" fill="url(#stem-print)"/>` },
+  { z: 130, paper: '#e1d8c2', art: skirt },
+  { z: 175, paper: '#e4dcc7', art: () => `<g transform="${MUSHROOM}"><use href="#gills" fill="#d2c6ad"/><use href="#cap-shape" fill="url(#cap)"/></g>` },
+  { z: 215, paper: '#e7dfcb', art: () => `<use href="#spots" transform="${MUSHROOM}" fill="#efe7d6"/>` },
+  { z: 260, paper: '#eae2cf', art: grass },
+  { z: 310, paper: '#eee7d5', art: () => '' },
+];
+const DEPTH = SHEETS.at(-1).z + PAPER;
+
+function sheetMarkup(sheet, index) {
+  const front = SHEETS.length - 1 - index;
+  // The back sheet is solid paper; every other sheet carries the stepped frame around its art.
+  const shape = index === 0 ? outline() : `${outline()} ${windowPath(-7 * front)}`;
+  const fill = index === 0 ? 'url(#sky)' : sheet.paper;
+  const base = index === 0 ? `<path d="${shape}" fill="${fill}"/>` : '';
+  const border = index === 0 ? '' : `<path d="${shape}" fill-rule="evenodd" fill="${fill}"/>`;
+  return `<svg viewBox="${BOX}">${base}${sheet.art()}${border}<path d="${shape}" fill-rule="evenodd" filter="url(#grain)"/></svg>`;
+}
+
+// ---- Build the card ----
+
+const card = document.querySelector('.card');
+const wallShadow = document.querySelector('.wall-shadow');
+const unit = (artUnits) => `calc(${artUnits / 1000} * var(--a))`;
+const middle = DEPTH / 2;
+
+function place(element, z) {
+  element.style.transform = `translateZ(${unit(z - middle)})`;
+  card.append(element);
+  return element;
+}
+
+function div(className, html = '') {
+  const element = document.createElement('div');
+  element.className = className;
+  element.innerHTML = html;
+  return element;
+}
+
+const shadows = SHEETS.map((sheet, index) => {
+  place(div('sheet', sheetMarkup(sheet, index)), sheet.z);
+  if (index === 0) return null;
+  const below = SHEETS[index - 1].z + PAPER;
+  const shadow = div('shadow', sheetMarkup(sheet, index));
+  card.append(shadow);
+  return { element: shadow, z: below + 1 - middle, gap: sheet.z - below };
+}).filter(Boolean);
+
+// The stacked sheets show along the card's cut edge as paper stripes over dark foam spacers.
+function stripes(direction) {
+  const stops = SHEETS.flatMap((sheet, index) => {
+    const color = index === 0 ? '#c3cdb0' : sheet.paper;
+    const from = (sheet.z / DEPTH) * 100, to = ((sheet.z + PAPER) / DEPTH) * 100;
+    return [`#3a3124 ${from}%`, `${color} ${from}%`, `${color} ${to}%`, `#3a3124 ${to}%`];
+  });
+  return `linear-gradient(${direction}, ${stops.join(', ')})`;
+}
+
+const EDGES = [
+  { normal: [-1, 0, 0], css: `left: 0; top: 0; width: ${unit(DEPTH)}; height: 100%; transform-origin: 0 50%;`, turn: 'rotateY(-90deg)', direction: 'to right' },
+  { normal: [1, 0, 0], css: `right: 0; top: 0; width: ${unit(DEPTH)}; height: 100%; transform-origin: 100% 50%;`, turn: 'rotateY(90deg)', direction: 'to left' },
+  { normal: [0, -1, 0], css: `left: 0; top: 0; width: 100%; height: ${unit(DEPTH)}; transform-origin: 50% 0;`, turn: 'rotateX(90deg)', direction: 'to bottom' },
+  { normal: [0, 1, 0], css: `left: 0; bottom: 0; width: 100%; height: ${unit(DEPTH)}; transform-origin: 50% 100%;`, turn: 'rotateX(-90deg)', direction: 'to top' },
+];
+for (const edge of EDGES) {
+  edge.element = div('edge');
+  edge.element.style.cssText = `${edge.css} background: ${stripes(edge.direction)}; transform: translateZ(${unit(-middle)}) ${edge.turn};`;
+  card.append(edge.element);
+}
+
+const sheen = place(div('sheen'), DEPTH + 1);
+
+// ---- Orientation and light ----
+
+// Matches CSS `rotateX(ax) rotateY(ay)`.
+function rotate([x, y, z], ax, ay) {
+  const x1 = x * Math.cos(ay) + z * Math.sin(ay);
+  const z1 = -x * Math.sin(ay) + z * Math.cos(ay);
+  return [x1, y * Math.cos(ax) - z1 * Math.sin(ax), y * Math.sin(ax) + z1 * Math.cos(ax)];
+}
+
+function unrotate([x, y, z], ax, ay) {
+  const y1 = y * Math.cos(ax) + z * Math.sin(ax);
+  const z1 = -y * Math.sin(ax) + z * Math.cos(ax);
+  return [x * Math.cos(ay) - z1 * Math.sin(ay), y1, x * Math.sin(ay) + z1 * Math.cos(ay)];
+}
+
+// Each sheet throws a soft shadow on the one behind it, sliding as the light's angle to the card changes.
+function castShadows(ax, ay) {
+  const light = unrotate(LIGHT, ax, ay);
+  for (const shadow of shadows) {
+    const dx = (-shadow.gap * light[0]) / light[2], dy = (-shadow.gap * light[1]) / light[2];
+    shadow.element.style.transform = `translate3d(${unit(dx)}, ${unit(dy)}, ${unit(shadow.z)})`;
+  }
+}
+
+function lightEdges(ax, ay) {
+  for (const edge of EDGES) {
+    const facing = Math.max(dot(rotate(edge.normal, ax, ay), LIGHT), 0);
+    edge.element.style.setProperty('--dim', (0.62 - 0.75 * facing).toFixed(3));
+  }
+}
+
+function lightFace(ax, ay) {
+  const normal = rotate([0, 0, 1], ax, ay);
+  const change = dot(normal, LIGHT) - LIGHT[2];
+  const wash = change < 0 ? `rgb(30 20 8 / ${(-change * 0.9).toFixed(3)})` : `rgb(255 248 228 / ${(change * 0.7).toFixed(3)})`;
+  const glint = clamp01((dot(normal, SHEEN) - 0.9) / 0.1) ** 2;
+  const band = 50 - 180 * ((normal[0] - SHEEN[0]) * 0.6 + (normal[1] - SHEEN[1]) * 0.8);
+  sheen.style.background = `linear-gradient(125deg, transparent ${(band - 18).toFixed(1)}%, rgb(255 252 240 / ${(0.06 + 0.34 * glint).toFixed(3)}) ${band.toFixed(1)}%, transparent ${(band + 18).toFixed(1)}%), ${wash}`;
+}
+
+// Parallel projection of the card plane along the light onto the wall behind it.
+function projectWallShadow(ax, ay, lift, a) {
+  const across = rotate([1, 0, 0], ax, ay), down = rotate([0, 1, 0], ax, ay);
+  const flatten = (v) => [v[0] - (LIGHT[0] * v[2]) / LIGHT[2], v[1] - (LIGHT[1] * v[2]) / LIGHT[2]];
+  const [ux, uy] = flatten(across), [vx, vy] = flatten(down);
+  const reach = -WALL * a;
+  const tx = (-LIGHT[0] / LIGHT[2]) * reach, ty = lift + (-LIGHT[1] / LIGHT[2]) * reach;
+  wallShadow.style.transform = `matrix3d(${ux}, ${uy}, 0, 0, ${vx}, ${vy}, 0, 0, 0, 0, 1, 0, ${tx}, ${ty}, ${WALL * a}, 1)`;
+}
+
+// ---- Motion: idle glances, or tilt towards the pointer ----
+
+const POSES = [[0.25, -0.6], [-0.4, 0.55], [0.55, 0.35], [-0.2, -0.45], [0.4, 0.7], [-0.55, -0.05]];
+const HOLD = calm ? 4.4 : 2.7;
+const WIND_UP = 0.35, GLIDE = 1;
+
+function idlePose(t) {
+  const step = Math.floor(t / HOLD);
+  const phase = t - step * HOLD;
+  const from = POSES[(step + POSES.length - 1) % POSES.length], to = POSES[step % POSES.length];
+  // Anticipation: lean briefly away before turning to the next glance.
+  const back = calm ? 0 : 0.2 * ease(clamp01(phase / WIND_UP));
+  const glide = ease(clamp01((phase - WIND_UP) / GLIDE));
+  return from.map((value, k) => MAX_TILT * mix(value - back * (to[k] - value), to[k], glide));
+}
+
+let pointerPose = [0, 0], lastPointer = -1e9;
+addEventListener('pointermove', (event) => {
+  pointerPose = [(0.5 - event.clientY / innerHeight) * 2 * MAX_TILT, (event.clientX / innerWidth - 0.5) * 2 * MAX_TILT];
+  lastPointer = performance.now();
+});
+document.documentElement.addEventListener('pointerleave', () => { lastPointer = -1e9; });
+
+// A spring lets the card overshoot and settle after each turn.
+const STIFFNESS = calm ? 9 : 36, DAMPING = calm ? 6 : 6.6;
+const tilt = [0, 0], spin = [0, 0];
+
+function follow(target, dt) {
+  for (let k = 0; k < 2; k++) {
+    spin[k] += (STIFFNESS * (target[k] - tilt[k]) - DAMPING * spin[k]) * dt;
+    tilt[k] += spin[k] * dt;
+  }
+}
+
+let a = 1;
+function resize() {
+  a = Math.min(innerHeight * 0.86, innerWidth * 0.92 * (1680 / 1400)) / 1.68;
+  document.body.style.setProperty('--a', `${a}px`);
+}
+addEventListener('resize', resize);
+resize();
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  const t = now / 1000;
+  follow(now - lastPointer < 2500 ? pointerPose : idlePose(t), dt);
+  const [ax, ay] = tilt;
+  const lift = calm ? 0 : 0.012 * a * Math.sin(t * 1.3);
+  card.style.transform = `translateY(${lift.toFixed(2)}px) rotateX(${ax}rad) rotateY(${ay}rad)`;
+  castShadows(ax, ay);
+  lightEdges(ax, ay);
+  lightFace(ax, ay);
+  projectWallShadow(ax, ay, lift, a);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

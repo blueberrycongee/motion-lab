@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pull</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    display: grid;
+    place-items: center;
+    background: radial-gradient(ellipse at 50% 40%, #cdd5cf, #aeb9b2);
+  }
+  .card {
+    --ch: min(90vh, 150vw);
+    position: relative;
+    width: calc(var(--ch) * 0.6);
+    height: var(--ch);
+    border-radius: calc(var(--ch) * 0.045);
+    overflow: hidden;
+    background: linear-gradient(#1d2a22, #33463a);
+    box-shadow: 0 calc(var(--ch) * 0.02) calc(var(--ch) * 0.06) #24312a40;
+    touch-action: none;
+    cursor: grab;
+    user-select: none;
+  }
+  .card:active { cursor: grabbing; }
+  .list {
+    position: absolute;
+    inset: 0;
+    background: #f5f1e8;
+    border-top: calc(var(--ch) * 0.012) solid #6a4f3a;
+  }
+  .sprout {
+    position: absolute;
+    left: 50%;
+    bottom: 100%;
+    width: calc(var(--ch) * 0.36);
+    translate: -50% 0;
+    pointer-events: none;
+  }
+  .sprout svg { display: block; width: 100%; overflow: visible; }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--ch) * 0.03);
+    height: calc(var(--ch) * 0.13);
+    padding: 0 calc(var(--ch) * 0.045);
+    border-bottom: calc(var(--ch) * 0.002) solid #e4ddcf;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+  .avatar {
+    flex: none;
+    width: calc(var(--ch) * 0.07);
+    aspect-ratio: 1;
+    border-radius: 50%;
+  }
+  .lines { flex: 1; display: grid; gap: calc(var(--ch) * 0.016); }
+  .line { height: calc(var(--ch) * 0.016); border-radius: calc(var(--ch) * 0.01); background: #ddd5c6; }
+  .line:first-child { background: #c9bfae; }
+  /* New items arrive with a fly agaric cap, seen from above, as their avatar. */
+  .row.fresh .avatar {
+    background:
+      radial-gradient(circle at 36% 34%, #efe7d6 0 9%, #0000 10%),
+      radial-gradient(circle at 66% 42%, #efe7d6 0 7%, #0000 8%),
+      radial-gradient(circle at 46% 68%, #efe7d6 0 8%, #0000 9%),
+      radial-gradient(circle at 74% 72%, #efe7d6 0 5%, #0000 6%),
+      radial-gradient(circle at 22% 60%, #efe7d6 0 5%, #0000 6%),
+      radial-gradient(#6e130b, #b8321a 72%);
+  }
+</style>
+</head>
+<body>
+<div class="card" role="feed" aria-label="Pull to refresh" aria-busy="false">
+  <div class="list">
+    <div class="sprout">
+      <svg viewBox="-620 -1160 1240 1160">
+        <g class="plant">
+          <g class="stem">
+            <path fill="#e8e2d2" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+            <path class="ring" fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+          </g>
+          <g class="cap">
+            <path fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+            <path fill="url(#capShade)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+            <g fill="#efe7d6">
+              <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+              <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+              <ellipse cx="-188" cy="-1030" rx="28" ry="22"/>
+              <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+              <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+              <ellipse cx="92" cy="-990" rx="34" ry="27"/>
+              <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+              <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+              <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+              <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+              <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+              <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+              <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+              <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+            </g>
+          </g>
+        </g>
+        <g class="spores" fill="#efe7d6"></g>
+        <defs>
+          <radialGradient id="capShade" cx="-40" cy="-1110" r="650" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#6e130b"/>
+            <stop offset="1" stop-color="#b8321a"/>
+          </radialGradient>
+        </defs>
+      </svg>
+    </div>
+    <div class="rows"></div>
+  </div>
+</div>
+<script type="module">
+const card = document.querySelector('.card');
+const list = card.querySelector('.list');
+const rows = card.querySelector('.rows');
+const plant = card.querySelector('.plant');
+const stem = card.querySelector('.stem');
+const ring = card.querySelector('.ring');
+const cap = card.querySelector('.cap');
+const sporeLayer = card.querySelector('.spores');
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Distances are fractions of the card height.
+const THRESHOLD = 0.4;
+const MAX_PULL = 0.6;
+const AVATARS = ['#c9a46a', '#93a38a', '#b97f62', '#8697a3', '#a89a7c', '#c48f7e'];
+
+const clamp01 = (k) => Math.min(Math.max(k, 0), 1);
+const smooth = (k) => k * k * (3 - 2 * k);
+const span = (k, from, to) => smooth(clamp01((k - from) / (to - from)));
+
+function makeRow(fresh = false) {
+  const row = document.createElement('div');
+  row.className = fresh ? 'row fresh' : 'row';
+  const widths = [40 + Math.random() * 35, 60 + Math.random() * 35];
+  row.innerHTML = `<div class="avatar"></div><div class="lines">${widths
+    .map((w) => `<div class="line" style="width:${w.toFixed(0)}%"></div>`).join('')}</div>`;
+  if (!fresh) row.querySelector('.avatar').style.background = AVATARS[Math.floor(Math.random() * AVATARS.length)];
+  return row;
+}
+
+// The mushroom is a function of how far the list is pulled: a button breaks the soil,
+// the stem lengthens, then the closed cap opens and spreads.
+function grow(p, ms) {
+  const size = 0.35 * span(p, 0, 0.12) + 0.65 * span(p, 0.05, 0.9);
+  const tension = Math.max(p - 1, 0);
+  plant.setAttribute('transform', `scale(${size * (1 - tension * 0.25)} ${size * (1 + tension * 0.4)})`);
+  const height = 0.06 + 0.94 * span(p, 0.08, 0.75);
+  stem.setAttribute('transform', `scale(${0.7 + 0.3 * span(p, 0.2, 0.9)} ${height})`);
+  ring.style.opacity = span(p, 0.55, 0.8);
+  const open = span(p, 0.45, 1);
+  // Rocking about the stem top while it refreshes, like a cap catching the wind.
+  const rock = refreshing ? Math.sin((ms - refreshStart) / 190) * 5 * Math.min((ms - refreshStart) / 300, 1) : 0;
+  cap.setAttribute('transform', `translate(0 ${-860 * (height - 1)}) rotate(${rock} 32 -840) `
+    + `translate(32 -820) scale(${0.5 + 0.5 * open} ${1.3 - 0.3 * open}) translate(-32 820)`);
+}
+
+// A spring drives the list whenever no finger holds it.
+let pull = 0, velocity = 0, target = 0, dragging = false;
+let refreshing = false, refreshStart = 0;
+
+function step(dt) {
+  if (dragging) return;
+  const stiffness = target > 0 ? 260 : 190, damping = target > 0 ? 20 : 25;
+  velocity += ((target - pull) * stiffness - velocity * damping) * dt;
+  pull += velocity * dt;
+}
+
+let last = performance.now();
+function frame(ms) {
+  const dt = Math.min((ms - last) / 1000, 1 / 30);
+  last = ms;
+  step(dt);
+  const shown = Math.max(pull, 0);
+  list.style.transform = `translateY(${(shown * card.clientHeight).toFixed(2)}px)`;
+  grow(shown / THRESHOLD, ms);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// Pulled distance resists more the further it goes, like a rubber band.
+const rubber = (raw) => MAX_PULL * (1 - Math.exp(-Math.max(raw, 0) / MAX_PULL));
+
+function drag(raw) {
+  dragging = true;
+  pull = rubber(raw);
+}
+
+function release() {
+  dragging = false;
+  velocity = 0;
+  if (pull >= THRESHOLD && !refreshing) refresh();
+  else if (!refreshing) target = 0;
+}
+
+async function refresh() {
+  refreshing = true;
+  refreshStart = performance.now();
+  target = THRESHOLD;
+  card.setAttribute('aria-busy', 'true');
+  for (let i = 0; i < 6; i++) {
+    puff();
+    await wait(230);
+  }
+  await wait(200);
+  insertRow();
+  refreshing = false;
+  target = 0;
+  card.setAttribute('aria-busy', 'false');
+}
+
+// Spores shake loose from the gills and drift down beside the stem.
+function puff() {
+  if (calm) return;
+  for (let i = 0; i < 4; i++) {
+    const spore = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    const x = 32 + (Math.random() - 0.5) * 900;
+    spore.setAttribute('cx', x.toFixed(0));
+    spore.setAttribute('cy', -800);
+    spore.setAttribute('r', (10 + Math.random() * 14).toFixed(0));
+    sporeLayer.append(spore);
+    const drift = (Math.random() - 0.5) * 260 + Math.sign(x - 32) * 120;
+    spore.animate([
+      { transform: 'translate(0px, 0px)', opacity: 0 },
+      { transform: `translate(${drift * 0.5}px, 160px)`, opacity: 1, offset: 0.25 },
+      { transform: `translate(${drift}px, 760px)`, opacity: 0 },
+    ], { duration: 1500 + Math.random() * 600, easing: 'cubic-bezier(0.3, 0.2, 0.6, 1)' })
+      .finished.then(() => spore.remove());
+  }
+}
+
+// New content opens a slot at the top; older rows slide down and the last falls away.
+function insertRow() {
+  const row = makeRow(true);
+  rows.prepend(row);
+  const height = row.offsetHeight;
+  row.animate([{ height: '0px', opacity: 0 }, { height: `${height}px`, opacity: 1 }],
+    { duration: calm ? 200 : 520, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)', delay: 160, fill: 'backwards' });
+  row.querySelector('.avatar').animate([{ transform: 'scale(0)' }, { transform: 'scale(1.15)', offset: 0.6 }, { transform: 'scale(1)' }],
+    { duration: 600, easing: 'cubic-bezier(0.3, 0, 0.3, 1)', delay: 360, fill: 'backwards' });
+  row.animate([{ backgroundColor: '#f3e3cf' }, { backgroundColor: '#f3e3cf00' }],
+    { duration: 1800, delay: 500, easing: 'ease-out', fill: 'backwards' });
+  while (rows.children.length > 10) rows.lastElementChild.remove();
+}
+
+// Real input takes over from the demo, which resumes after a few idle seconds.
+const IDLE_MS = 4000;
+let lastInput = -IDLE_MS;
+let startY = null;
+card.addEventListener('pointerdown', (event) => {
+  lastInput = performance.now();
+  if (refreshing) return;
+  card.setPointerCapture(event.pointerId);
+  startY = event.clientY - (pull > 0 ? pull * card.clientHeight : 0);
+});
+card.addEventListener('pointermove', (event) => {
+  if (startY === null) return;
+  lastInput = performance.now();
+  drag((event.clientY - startY) / card.clientHeight);
+});
+const end = () => {
+  if (startY === null) return;
+  startY = null;
+  lastInput = performance.now();
+  release();
+};
+card.addEventListener('pointerup', end);
+card.addEventListener('pointercancel', end);
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// The demo finger pulls with an ease-in-out stroke, sometimes stopping short of the threshold.
+async function demoPull(reach, ms) {
+  const begin = performance.now();
+  for (;;) {
+    await new Promise(requestAnimationFrame);
+    if (performance.now() - lastInput < IDLE_MS) return;
+    const k = Math.min((performance.now() - begin) / ms, 1);
+    drag(reach * smooth(k));
+    if (k === 1) break;
+  }
+  await wait(160);
+  release();
+}
+
+async function demo() {
+  await wait(800);
+  for (let round = 0; ; round++) {
+    if (performance.now() - lastInput > IDLE_MS && !refreshing) {
+      await demoPull(round % 3 === 1 ? 0.3 : 0.95, round % 3 === 1 ? 900 : 1300);
+    }
+    await wait(round % 3 === 1 ? 900 : 2600);
+  }
+}
+
+for (let i = 0; i < 8; i++) rows.append(makeRow());
+demo();
+</script>
+</body>
+</html>

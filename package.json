@@ -1,0 +1,17 @@
+{
+  "name": "motion-lab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "posters": "node scripts/posters.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0",
+    "shiki": "^4.5.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2"
+  }
+}

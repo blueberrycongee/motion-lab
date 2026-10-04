@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pop-up</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background:
+      repeating-linear-gradient(90deg, rgb(255 255 255 / 0.025) 0 2px, transparent 2px 5px),
+      radial-gradient(110% 90% at 45% 35%, #a3aba8, #5d6766 80%);
+    perspective: calc(4.2 * var(--u));
+    perspective-origin: 50% 35%;
+  }
+  .world { position: absolute; left: 50%; top: 58%; transform-style: preserve-3d; }
+  .world div, .world > svg { position: absolute; transform-style: preserve-3d; }
+  .world svg { overflow: visible; }
+
+  /* Every printed piece is a sheet whose bottom edge is its hinge. */
+  .sheet {
+    left: calc(var(--w) * -0.5); top: calc(var(--h) * -1);
+    width: var(--w); height: var(--h);
+    transform-origin: 50% 100%;
+  }
+  .sheet > svg { position: absolute; inset: 0; width: 100%; height: 100%; backface-visibility: hidden; }
+  .sheet > .back { transform: rotateY(180deg); }
+  .strut { background: var(--ink); }
+  /* Both panels of a tent share the ridge, so one symmetric cut makes a rock. */
+  .tent {
+    clip-path: polygon(0 100%, 3% 55%, 14% 18%, 34% 2%, 62% 0, 84% 12%, 96% 48%, 100% 100%);
+    background:
+      radial-gradient(40% 30% at 30% 20%, rgb(206 214 160 / 0.6), transparent),
+      radial-gradient(35% 40% at 75% 35%, rgb(120 140 70 / 0.5), transparent),
+      linear-gradient(#9aa766, #75864a 45%, #8a8a78 70%, #77766a);
+  }
+
+  .page { width: var(--w); height: var(--h); left: calc(var(--w) * -0.5); }
+  .page > svg, .page > .shade { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .leaf { top: calc(var(--h) * -1); transform-origin: 50% 100%; }
+  .leaf > .shade { background: #1d1a14; opacity: 0; pointer-events: none; }
+  .cover {
+    inset: calc(-0.025 * var(--u)) calc(-0.03 * var(--u)) 0;
+    border-radius: calc(0.02 * var(--u));
+    background:
+      repeating-linear-gradient(0deg, rgb(255 255 255 / 0.04) 0 1px, transparent 1px 3px),
+      repeating-linear-gradient(90deg, rgb(0 0 0 / 0.06) 0 1px, transparent 1px 3px),
+      #2f4030;
+  }
+  .edge {
+    left: 0; right: 0; height: calc(0.05 * var(--u));
+    transform-origin: 50% 0;
+    background: repeating-linear-gradient(#efe7d4 0 1px, #d7ccb3 1px 2px);
+  }
+  .shadow { filter: blur(calc(0.012 * var(--u))); opacity: 0.38; }
+  .table-shadow { filter: blur(calc(0.05 * var(--u))); opacity: 0.45; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position: absolute">
+  <defs>
+    <radialGradient id="cap" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6e130b"/>
+      <stop offset="1" stop-color="#b8321a"/>
+    </radialGradient>
+    <linearGradient id="stem" x1="-180" x2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#cfc6b0"/>
+      <stop offset="0.45" stop-color="#efe9dc"/>
+      <stop offset="1" stop-color="#d2c9b4"/>
+    </linearGradient>
+    <g id="mushroom-outline">
+      <path d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+      <path d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+      <path d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+      <path d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+      <path d="M-330 0 Q-250 -70 -170 -40 Q-60 -90 30 -45 Q140 -95 230 -40 Q290 -60 340 0 Z"/>
+    </g>
+    <g id="mushroom">
+      <use href="#mushroom-outline" fill="#f6f0e2" stroke="#f6f0e2" stroke-width="34" stroke-linejoin="round"/>
+      <path fill="url(#stem)" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+      <path fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+      <path fill="#c4b9a2" d="M145 -555 L-114 -555 L-104 -578 L136 -578 Z"/>
+      <path fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+      <path fill="url(#cap)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+      <g fill="#efe7d6">
+        <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+        <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+        <ellipse cx="-188" cy="-1030" rx="28" ry="22"/>
+        <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+        <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+        <ellipse cx="92" cy="-990" rx="34" ry="27"/>
+        <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+        <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+        <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+        <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+        <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+        <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+        <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+        <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+      </g>
+      <path fill="#6d7f3f" d="M-330 0 Q-250 -70 -170 -40 Q-60 -90 30 -45 Q140 -95 230 -40 Q290 -60 340 0 Z"/>
+    </g>
+  </defs>
+</svg>
+<div class="world"></div>
+<script type="module">
+const W = 2.5, D = 1.45, BLOCK = 0.05;
+const CLOSED = 3.07;
+const CYCLE = 14;
+const LIGHT = normalize([-0.45, 0.6, 0.75]);
+const PAPER = '#f6f0e2';
+
+// Pieces stand on parallel-fold linkages: each is hinged to one page at distance `a` from
+// the spine and braced by a strut to the other page. A hinge-to-strut height of
+// h = 2ad / (a - d) makes the piece stand upright when the book is flat and lie flat, pointing away
+// from the spine, when shut; so `a` plus the sheet height must fit within the page.
+const PIECES = [
+  { art: 'backdrop', page: 'far', a: 0.4, h: 0.55, x: 0, w: 2.4, height: 1.0, struts: [-0.5, 0.5], ink: '#3f5c4a' },
+  { art: 'ferns', page: 'far', a: 0.2, h: 0.15, x: 0, w: 2.3, height: 0.42, struts: [-0.78, 0.86], ink: '#56703a' },
+  { art: 'small', page: 'near', a: 0.5, h: 0.28, x: -0.78, w: 0.6, height: 0.52, struts: [-0.78], ink: '#d9cfb8' },
+  { art: 'small-mirrored', page: 'near', a: 0.62, h: 0.24, x: 0.86, w: 0.5, height: 0.44, struts: [0.86], ink: '#d9cfb8' },
+  { art: 'hero', page: 'near', a: 0.12, h: 0.24, x: 0, w: 1.3, height: 1.2, struts: [0.03], ink: '#d9cfb8' },
+];
+// Tent folds glued across the gutter at ±a, rising into mossy banks.
+const TENTS = [{ x: -0.62, a: 0.3, length: 0.4, w: 0.5 }, { x: 0.5, a: 0.26, length: 0.36, w: 0.42 }];
+
+const NS = 'http://www.w3.org/2000/svg';
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const world = document.querySelector('.world');
+const u = (v) => `calc(${v} * var(--u))`;
+const clamp01 = (x) => Math.min(Math.max(x, 0), 1);
+const mix = (a, b, f) => a + (b - a) * f;
+const progress = (t, start, duration) => clamp01((t - start) / duration);
+const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - (2 - 2 * x) ** 3 / 2);
+
+let seed = 3;
+function random() {
+  seed = (seed * 16807) % 2147483647;
+  return seed / 2147483647;
+}
+
+function normalize(v) {
+  const l = Math.hypot(...v);
+  return v.map((c) => c / l);
+}
+
+function rotateX([x, y, z], angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  return [x, y * c - z * s, y * s + z * c];
+}
+
+function make(tag, className, parent, html = '') {
+  const node = tag === 'svg' ? document.createElementNS(NS, 'svg') : document.createElement(tag);
+  node.setAttribute('class', className);
+  node.innerHTML = html;
+  parent.append(node);
+  return node;
+}
+
+// ---- Printed artwork, in thousandths of a unit with y up the sheet as negative ----
+
+function spruce(x, height) {
+  const width = height * 0.36;
+  let left = '', right = '';
+  for (let tier = 1; tier <= 5; tier++) {
+    const y = -height * (1 - tier * 0.18);
+    left = `L${x - width * tier * 0.2} ${y} L${x - width * tier * 0.12} ${y - height * 0.05} ` + left;
+    right += `L${x + width * tier * 0.12} ${y - height * 0.05} L${x + width * tier * 0.2} ${y} `;
+  }
+  return `M${x - width * 0.12} 0 ${left}L${x} ${-height} ${right}L${x + width * 0.12} 0 Z`;
+}
+
+function blades(x, height, count, spread) {
+  let d = '';
+  for (let i = 0; i < count; i++) {
+    const base = x + (i / (count - 1) - 0.5) * spread;
+    const tip = base + (random() - 0.5) * height * 0.9;
+    const h = height * (0.55 + 0.45 * random());
+    d += `M${base - 14} 0 Q${base} ${-h * 0.5} ${tip} ${-h} Q${base + 6} ${-h * 0.45} ${base + 14} 0 Z `;
+  }
+  return d;
+}
+
+function backdropArt() {
+  let far = '', near = '';
+  // Trees stay inside the page so the shut book hides them.
+  const row = (count, i, height) => (i / (count - 1) - 0.5) * 2 * (1180 - 0.36 * height) + (random() - 0.5) * 60;
+  for (let i = 0; i < 11; i++) {
+    const height = 700 + random() * 280;
+    far += spruce(row(11, i, height), height);
+  }
+  for (let i = 0; i < 8; i++) {
+    const height = 430 + random() * 230;
+    near += spruce(row(8, i, height), height);
+  }
+  const band = 'M-1200 0 L-1200 -90 Q0 -150 1200 -90 L1200 0 Z';
+  const outline = `<path d="${far}${near}${band}"/>`;
+  const art = `<path d="${far}" fill="#8fa596"/><path d="${near}${band}" fill="#3f5c4a"/>`;
+  return { outline, art };
+}
+
+function fernArt() {
+  let back = '', front = '';
+  for (const x of [-1000, -760, -430, 380, 700, 990]) back += blades(x, 380, 7, 150);
+  for (const x of [-880, -560, 560, 860]) front += blades(x, 260, 6, 120);
+  const outline = `<path d="${back}${front}"/>`;
+  return { outline, art: `<path d="${back}" fill="#7f9a52"/><path d="${front}" fill="#56703a"/>` };
+}
+
+const ART = {
+  backdrop: backdropArt(),
+  ferns: fernArt(),
+  hero: { outline: '<use href="#mushroom-outline"/>', art: '<use href="#mushroom"/>' },
+  small: { outline: '<use href="#mushroom-outline" transform="scale(0.42)"/>', art: '<use href="#mushroom" transform="scale(0.42)"/>' },
+  'small-mirrored': { outline: '<use href="#mushroom-outline" transform="scale(-0.36 0.36)"/>', art: '<use href="#mushroom" transform="scale(-0.36 0.36)"/>' },
+};
+
+// Forest floor printed across both pages: leaf litter over moss, glue tabs at every hinge.
+function floorArt(y0, y1, hinges) {
+  let litter = '';
+  for (let i = 0; i < 70; i++) {
+    const x = -1200 + random() * 2400, y = y0 + random() * (y1 - y0);
+    const colour = ['#b98a43', '#a5582f', '#c9a25c', '#8b6a3a'][i % 4];
+    litter += `<ellipse cx="${x}" cy="${y}" rx="${26 + random() * 22}" ry="${10 + random() * 6}" fill="${colour}" opacity="0.75" transform="rotate(${random() * 180} ${x} ${y})"/>`;
+  }
+  let moss = '';
+  for (let i = 0; i < 16; i++) {
+    moss += `<ellipse cx="${-1150 + random() * 2300}" cy="${y0 + random() * (y1 - y0)}" rx="${120 + random() * 160}" ry="${50 + random() * 60}" fill="#9aab6c" opacity="0.35"/>`;
+  }
+  const tabs = hinges.map(([x, y, w]) => `<rect x="${x - w / 2}" y="${y - 22}" width="${w}" height="44" fill="#e7dec9" stroke="#cbbfa5" stroke-width="3"/>`).join('');
+  return `<rect x="-1250" y="${Math.min(y0, y1)}" width="2500" height="${Math.abs(y1 - y0)}" fill="#efe6d1"/>${moss}${litter}${tabs}`;
+}
+
+// ---- The book ----
+
+let unit = 1, shutDistance = 1.5;
+const table = make('svg', 'table-shadow', world);
+table.innerHTML = '<path fill="#1b211f"/>';
+const tableShadow = table.firstChild;
+
+const near = make('div', 'page', world);
+near.style.setProperty('--w', u(W));
+near.style.setProperty('--h', u(D));
+make('div', 'cover', near).style.transform = `translateZ(${u(-BLOCK)})`;
+make('div', 'edge', near).style.cssText = `top: 100%; transform: rotateX(-90deg)`;
+
+const leaf = make('div', 'page leaf', world);
+leaf.style.setProperty('--w', u(W));
+leaf.style.setProperty('--h', u(D));
+const cover = make('div', 'cover', leaf);
+cover.style.transform = `translateZ(${u(-BLOCK)}) rotateY(180deg)`;
+cover.innerHTML = `<svg viewBox="-620 -1250 1240 1400" style="position:absolute; left:39%; top:30%; width:22%; height:40%; transform: rotate(180deg)">
+  <use href="#mushroom-outline" fill="none" stroke="#b79d5c" stroke-width="22" stroke-linejoin="round"/></svg>`;
+make('div', 'edge', leaf).style.cssText = 'top: 0; transform: rotateX(-90deg)';
+
+const nearTabs = [], farTabs = [];
+const pieces = PIECES.map((piece) => {
+  const d = (piece.a * piece.h) / (2 * piece.a + piece.h);
+  const length = Math.hypot(piece.a + d, piece.h);
+  const sheet = make('div', 'sheet', world);
+  sheet.style.setProperty('--w', u(piece.w));
+  sheet.style.setProperty('--h', u(piece.height));
+  const viewBox = `${-piece.w * 500} ${-piece.height * 1000} ${piece.w * 1000} ${piece.height * 1000}`;
+  const { outline, art } = ART[piece.art];
+  const front = make('svg', 'front', sheet, art);
+  const back = make('svg', 'back', sheet, `<g fill="${PAPER}" stroke="${PAPER}" stroke-width="34" stroke-linejoin="round">${outline}</g>`);
+  front.setAttribute('viewBox', viewBox);
+  back.setAttribute('viewBox', viewBox);
+  const struts = piece.struts.map((x) => {
+    const strut = make('div', 'sheet strut', world);
+    strut.style.setProperty('--w', u(0.05));
+    strut.style.setProperty('--ink', piece.ink);
+    strut.style.setProperty('--h', u(length));
+    return { el: strut, x };
+  });
+  const own = piece.page === 'near' ? nearTabs : farTabs;
+  const other = piece.page === 'near' ? farTabs : nearTabs;
+  own.push([piece.x * 1000, piece.a * 1000 * (piece.page === 'near' ? 1 : -1), piece.w * 700]);
+  for (const x of piece.struts) other.push([x * 1000, d * 1000 * (piece.page === 'near' ? -1 : 1), 90]);
+  return { ...piece, d, length, sheet, front, back, struts, outline };
+});
+const tents = TENTS.map((tent) => {
+  nearTabs.push([tent.x * 1000, tent.a * 1000, tent.w * 1000]);
+  farTabs.push([tent.x * 1000, -tent.a * 1000, tent.w * 1000]);
+  return {
+    ...tent,
+    panels: [0, 1].map(() => {
+      const panel = make('div', 'sheet tent', world);
+      panel.style.setProperty('--w', u(tent.w));
+      panel.style.setProperty('--h', u(tent.length));
+      return panel;
+    }),
+  };
+});
+
+const nearArt = make('svg', '', near, floorArt(0, D * 1000, nearTabs));
+nearArt.setAttribute('viewBox', `-1250 0 2500 ${D * 1000}`);
+nearArt.insertAdjacentHTML('beforeend', `<rect x="-1250" y="0" width="2500" height="140" fill="url(#gutter-near)"/>`);
+const leafArt = make('svg', '', leaf, floorArt(-D * 1000, 0, farTabs));
+leafArt.setAttribute('viewBox', `-1250 ${-D * 1000} 2500 ${D * 1000}`);
+leafArt.insertAdjacentHTML('beforeend', `<rect x="-1250" y="-140" width="2500" height="140" fill="url(#gutter-far)"/>`);
+document.querySelector('defs').insertAdjacentHTML('beforeend', `
+  <linearGradient id="gutter-near" x2="0" y2="1"><stop offset="0" stop-color="#5a4a30" stop-opacity="0.3"/><stop offset="1" stop-color="#5a4a30" stop-opacity="0"/></linearGradient>
+  <linearGradient id="gutter-far" x2="0" y2="1"><stop offset="0" stop-color="#5a4a30" stop-opacity="0"/><stop offset="1" stop-color="#5a4a30" stop-opacity="0.3"/></linearGradient>`);
+const leafShade = make('div', 'shade', leaf);
+
+const nearShadowSvg = make('svg', 'shadow', near, '<g fill="#2a2416"></g>');
+nearShadowSvg.setAttribute('viewBox', `-1250 0 2500 ${D * 1000}`);
+const leafShadowSvg = make('svg', 'shadow', leaf, '<g fill="#2a2416"></g>');
+leafShadowSvg.setAttribute('viewBox', `-1250 ${-D * 1000} 2500 ${D * 1000}`);
+for (const svg of [nearShadowSvg, leafShadowSvg]) {
+  svg.style.cssText = `width: 100%; height: 100%; transform: translateZ(${u(0.002)})`;
+}
+
+// ---- Mechanics ----
+
+// Where two rigid links meet: circle (A, r0) against circle (Q, r1), on the given side of A→Q.
+function linkage(A, r0, Q, r1, side) {
+  const dy = Q[0] - A[0], dz = Q[1] - A[1];
+  const dist = Math.hypot(dy, dz);
+  const along = (r0 * r0 - r1 * r1 + dist * dist) / (2 * dist);
+  const off = Math.sqrt(Math.max(r0 * r0 - along * along, 0)) * side;
+  return [A[0] + (dy * along - dz * off) / dist, A[1] + (dz * along + dy * off) / dist];
+}
+
+// Stands a sheet with its hinge at [y, z] and its top pointing along `up` (in the y-z plane).
+function stand(el, x, [y, z], up) {
+  const angle = Math.atan2(-up[1], -up[0]);
+  el.style.transform = `translate3d(${x * unit}px, ${y * unit}px, ${z * unit}px) rotateX(${angle}rad)`;
+  return [0, -Math.sin(angle), Math.cos(angle)];
+}
+
+const brightness = (normal) => 0.62 + 0.55 * Math.max(normal[0] * LIGHT[0] + normal[1] * LIGHT[1] + normal[2] * LIGHT[2], 0);
+
+// Parallel projection along the light onto a page plane through the spine, as an SVG matrix
+// that maps a sheet's artwork straight onto that page.
+function shadowMatrix(x, hinge, up, toPage) {
+  const o = toPage([x, hinge[0], hinge[1]]);
+  const ex = toPage([x + 0.001, hinge[0], hinge[1]]);
+  const ey = toPage([x, hinge[0] - up[0] * 0.001, hinge[1] - up[1] * 0.001]);
+  return `matrix(${ex[0] - o[0]} ${ex[1] - o[1]} ${ey[0] - o[0]} ${ey[1] - o[1]} ${o[0] * 1000} ${o[1] * 1000})`;
+}
+
+function onPlane(normal, rotate) {
+  const lightDot = LIGHT[0] * normal[0] + LIGHT[1] * normal[1] + LIGHT[2] * normal[2];
+  return (p) => {
+    const s = (p[0] * normal[0] + p[1] * normal[1] + p[2] * normal[2]) / lightDot;
+    const q = rotate([p[0] - LIGHT[0] * s, p[1] - LIGHT[1] * s, p[2] - LIGHT[2] * s]);
+    return [q[0], q[1]];
+  };
+}
+
+// The cover's opening angle over one cycle: closed, eased open with a small landing bounce,
+// held, then closed again.
+function opening(t) {
+  const open = ease(progress(t, 1.2, 2.4)) - ease(progress(t, 9.6, 2.2));
+  let phi = CLOSED * (1 - open);
+  if (!calm) {
+    const landed = t - 3.6, shut = t - 11.8;
+    if (landed > 0 && landed < 2) phi += 0.05 * Math.exp(-5 * landed) * Math.abs(Math.sin(9 * landed));
+    if (shut > 0 && shut < 2) phi -= 0.05 * Math.exp(-5 * shut) * Math.abs(Math.sin(9 * shut));
+  }
+  return phi;
+}
+
+// Paper flexes as the page lands: a damped sway that starts later for pieces farther out.
+function sway(t, distance) {
+  if (calm) return 0;
+  const since = t - 3.45 - distance * 0.25;
+  return since > 0 ? 0.1 * Math.exp(-4 * since) * Math.sin(10 * since) : 0;
+}
+
+function pose(t) {
+  const phi = opening(t);
+  const farDir = [-Math.cos(phi), Math.sin(phi)];
+  leaf.style.transform = `rotateX(${-phi}rad)`;
+  const leafNormal = [0, Math.sin(phi), Math.cos(phi)];
+  leafShade.style.opacity = (1 - brightness(leafNormal) / 1.1).toFixed(3);
+
+  const toNear = onPlane([0, 0, 1], (p) => p);
+  const toLeaf = onPlane(leafNormal, (p) => rotateX(p, phi));
+  const nearShadows = [], leafShadows = [];
+  const leafLit = clamp01((LIGHT[1] * leafNormal[1] + LIGHT[2] * leafNormal[2]) * 3);
+
+  const cast = (outline, x, hinge, up) => {
+    nearShadows.push(`<g transform="${shadowMatrix(x, hinge, up, toNear)}">${outline}</g>`);
+    if (leafLit > 0) leafShadows.push(`<g transform="${shadowMatrix(x, hinge, up, toLeaf)}">${outline}</g>`);
+  };
+
+  for (const piece of pieces) {
+    const onNear = piece.page === 'near';
+    const hinge = onNear ? [piece.a, 0] : [piece.a * farDir[0], piece.a * farDir[1]];
+    const anchor = onNear ? [piece.d * farDir[0], piece.d * farDir[1]] : [piece.d, 0];
+    const top = linkage(hinge, piece.h, anchor, piece.length, onNear ? -1 : 1);
+    const lean = sway(t, piece.a) * (onNear ? -1 : 1);
+    const raw = [(top[0] - hinge[0]) / piece.h, (top[1] - hinge[1]) / piece.h];
+    const up = [raw[0] * Math.cos(lean) - raw[1] * Math.sin(lean), raw[0] * Math.sin(lean) + raw[1] * Math.cos(lean)];
+    const normal = stand(piece.sheet, piece.x, [hinge[0], hinge[1] + 0.003], up);
+    piece.front.style.filter = `brightness(${brightness(normal).toFixed(3)})`;
+    piece.back.style.filter = `brightness(${brightness(normal.map((c) => -c)).toFixed(3)})`;
+    cast(piece.outline, piece.x, hinge, up);
+    const strutTop = [hinge[0] + up[0] * piece.h, hinge[1] + up[1] * piece.h];
+    for (const strut of piece.struts) {
+      const toward = [(anchor[0] - strutTop[0]) / piece.length, (anchor[1] - strutTop[1]) / piece.length];
+      const n = stand(strut.el, strut.x, strutTop, toward);
+      strut.el.style.filter = `brightness(${brightness(n.map(Math.abs)).toFixed(3)})`;
+    }
+  }
+
+  for (const tent of tents) {
+    const nearFoot = [tent.a, 0], farFoot = [tent.a * farDir[0], tent.a * farDir[1]];
+    const ridge = linkage(nearFoot, tent.length, farFoot, tent.length, -1);
+    [nearFoot, farFoot].forEach((foot, i) => {
+      const up = [(ridge[0] - foot[0]) / tent.length, (ridge[1] - foot[1]) / tent.length];
+      const normal = stand(tent.panels[i], tent.x, foot, up).map((c) => (i ? -c : c));
+      tent.panels[i].style.filter = `brightness(${brightness(normal).toFixed(3)})`;
+      const outline = `<rect x="${-tent.w * 500}" y="${-tent.length * 1000}" width="${tent.w * 1000}" height="${tent.length * 1000}"/>`;
+      cast(outline, tent.x, foot, up);
+    });
+  }
+
+  // The lifted cover darkens the page beneath it and the table behind it.
+  const corner = (x) => [x, D * farDir[0], D * farDir[1]];
+  const leafOutline = (project) => [corner(-W / 2), corner(W / 2), [W / 2, 0, 0], [-W / 2, 0, 0]]
+    .map(project).map(([x, y]) => `${(x * 1000).toFixed(0)} ${(y * 1000).toFixed(0)}`).join(' L');
+  nearShadows.push(`<path d="M${leafOutline(toNear)} Z"/>`);
+  nearShadowSvg.firstChild.innerHTML = nearShadows.join('');
+  leafShadowSvg.firstChild.innerHTML = leafShadows.join('');
+  leafShadowSvg.style.opacity = leafLit;
+  const toTable = (p) => {
+    const s = (p[2] + BLOCK) / LIGHT[2];
+    return [p[0] - LIGHT[0] * s, p[1] - LIGHT[1] * s];
+  };
+  tableShadow.setAttribute('d', `M-1290 -20 L1290 -20 L1290 ${D * 1000 + 60} L-1290 ${D * 1000 + 60} Z M${leafOutline(toTable)} Z`);
+  return phi;
+}
+
+function resize() {
+  unit = Math.min(innerHeight * 0.5, innerWidth * 0.56);
+  // Narrow screens crop the open spread to its centre but step back far enough to show the shut book.
+  shutDistance = 1.5 + Math.max(0, 1.33 - innerWidth / innerHeight) * 1.7;
+  document.body.style.setProperty('--u', `${unit}px`);
+  table.setAttribute('viewBox', '-2000 -2000 4000 4000');
+  table.style.cssText = `left: ${-2 * unit}px; top: ${-2 * unit}px; width: ${4 * unit}px; height: ${4 * unit}px; transform: translateZ(${-BLOCK * unit}px)`;
+}
+addEventListener('resize', resize);
+resize();
+
+let lookX = 0, aimX = 0, lastInput = -1e9;
+addEventListener('pointermove', (event) => {
+  aimX = event.clientX / innerWidth - 0.5;
+  lastInput = performance.now();
+});
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.1);
+  last = now;
+  const t = ((now / 1000) * (calm ? 0.7 : 1)) % CYCLE;
+  const phi = pose(t);
+  const open = 1 - phi / CLOSED;
+  if (now - lastInput > 3000) aimX = 0;
+  lookX += (aimX - lookX) * Math.min(dt * 3, 1);
+  const yaw = (calm ? 0 : 0.1 * Math.sin((now / 1000) * 0.35)) + lookX * 0.6;
+  const tilt = mix(0.85, 1.12, open);
+  world.style.transform = `translateZ(${-mix(shutDistance, 0, open) * unit}px) rotateX(${tilt}rad) rotateZ(${yaw}rad)
+    translate3d(0, ${-mix(0.55, 0.05, open) * unit}px, ${-mix(0, 0.42, open) * unit}px)`;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

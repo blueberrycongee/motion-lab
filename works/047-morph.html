@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Morph</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: radial-gradient(ellipse 90% 75% at 50% 38%, #a9b394 0%, #8d9a78 55%, #73815f 100%); }
+  svg { position: fixed; inset: 0; width: 100%; height: 100%; }
+  .wart { transform-box: view-box; transform-origin: 0 0; }
+</style>
+</head>
+<body>
+<svg viewBox="-760 -1290 1520 1500" aria-hidden="true">
+  <ellipse class="shadow" cx="0" cy="12" rx="200" ry="26" fill="#5d6a4a" opacity="0.55"/>
+  <path class="stem" fill="#e8e2d2"/>
+  <path class="stem-shade" fill="#d3cab4"/>
+  <path class="ring" fill="#ddd5c2"/>
+  <path class="gills" fill="#d2c6ad"/>
+  <path class="cap"/>
+  <path class="cap-light" fill="#fff" opacity="0.1"/>
+  <g class="warts" fill="#efe7d6"></g>
+  <path class="volva" fill="#ece5d4"/>
+
+  <path fill="#4f3b2c" d="M-1400 6 C-900 -6 -500 14 -120 6 S600 -4 1400 8 V700 H-1400 Z"/>
+  <path fill="#3f2f23" d="M-1400 70 C-800 60 -300 84 200 72 S900 64 1400 76 V700 H-1400 Z"/>
+  <path fill="#a2742f" d="M-560 22 C-520 -2 -440 -4 -400 18 C-450 34 -520 36 -560 22 Z"/>
+  <path fill="#86592a" d="M430 30 C470 6 560 8 600 26 C560 44 470 46 430 30 Z"/>
+  <path fill="none" stroke="#8e6a3a" stroke-width="5" stroke-linecap="round" d="M-300 40 L-170 30 M250 52 L360 60"/>
+</svg>
+
+<script type="module">
+const CYCLE = 16000;
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const easeInOut = 'cubic-bezier(0.45, 0, 0.55, 1)';
+const pop = 'cubic-bezier(0.2, 0.9, 0.3, 1)';
+const sag = 'cubic-bezier(0.6, 0, 0.85, 0.5)';
+const gravity = 'cubic-bezier(0.55, 0, 0.9, 0.45)';
+
+// The life cycle as poses. Every part keeps the same commands in every pose, so each path morphs.
+// stem: centreline base, two controls and top, with half-widths at base, middle and top.
+// cap: half-width, dome height, rim droop (negative turns the rim up), rim curl, underside rise, gill depth, tilt.
+// ring: a membrane from stem to rim while young (veil), later a skirt `drop` long at `at` along the stem.
+// volva: the universal veil — an egg while closed, then a cup whose lip falls to `lip`.
+// warts: remnants of the veil; `spread` 0 packs them on the crown, `fallen` drops them on the soil.
+const stages = [
+  {
+    at: 0, colour: '#d2401d', stemColour: '#e8e2d2',
+    stem: { base: [0, 40], c1: [0, 38], c2: [0, 34], top: [0, 30], widths: [20, 14, 12] },
+    cap: { w: 30, h: 30, droop: 20, curl: 10, under: 0, gill: 0, tilt: 0 },
+    ring: { veil: true }, volva: { w: 50, mid: 40, lip: -10 }, warts: { spread: 0, size: 0.3 },
+  },
+  {
+    at: 1500, colour: '#d2401d', stemColour: '#e8e2d2',
+    stem: { base: [0, 20], c1: [0, 0], c2: [0, -60], top: [0, -110], widths: [70, 55, 50] },
+    cap: { w: 120, h: 110, droop: 60, curl: 25, under: 20, gill: 0, tilt: 0 },
+    ring: { veil: true }, volva: { w: 160, mid: -130, lip: -360 }, warts: { spread: 0, size: 1.4 },
+  },
+  {
+    at: 3000, easing: 'ease-in', colour: '#d2401d', stemColour: '#e8e2d2',
+    stem: { base: [0, 20], c1: [0, -20], c2: [0, -110], top: [0, -200], widths: [80, 60, 55] },
+    cap: { w: 150, h: 140, droop: 70, curl: 35, under: 20, gill: 0, tilt: 0 },
+    ring: { veil: true }, volva: { w: 172, mid: -150, lip: -410 }, warts: { spread: 0, size: 1.6 },
+  },
+  {
+    at: 3500, easing: pop, colour: '#d2401d', stemColour: '#e8e2d2',
+    stem: { base: [0, 0], c1: [0, -110], c2: [0, -220], top: [0, -300], widths: [150, 80, 70] },
+    cap: { w: 240, h: 210, droop: 100, curl: 50, under: 30, gill: 6, tilt: 0 },
+    ring: { veil: true }, volva: { w: 168, mid: -120, lip: -50 }, warts: { spread: 0.15, size: 1.9 },
+  },
+  {
+    at: 5400, colour: '#c6361b', stemColour: '#e8e2d2',
+    stem: { base: [0, 0], c1: [-5, -220], c2: [15, -440], top: [25, -620], widths: [165, 88, 80] },
+    cap: { w: 390, h: 270, droop: 80, curl: 30, under: -10, gill: 14, tilt: 0 },
+    ring: { veil: true }, volva: { w: 178, mid: -100, lip: -48 }, warts: { spread: 0.6, size: 1.3 },
+  },
+  {
+    at: 6300, colour: '#bf3419', stemColour: '#e8e2d2',
+    stem: { base: [0, 0], c1: [-5, -290], c2: [22, -560], top: [33, -760], widths: [172, 91, 84] },
+    cap: { w: 480, h: 285, droop: 40, curl: 12, under: -16, gill: 18, tilt: 0 },
+    ring: { at: 0.8, drop: 110, flare: 1.5 }, volva: { w: 184, mid: -94, lip: -44 }, warts: { spread: 0.85, size: 1.1 },
+  },
+  {
+    at: 7600, colour: '#b8321a', stemColour: '#e8e2d2',
+    stem: { base: [0, 0], c1: [-5, -330], c2: [25, -640], top: [37, -860], widths: [175, 92, 85] },
+    cap: { w: 559, h: 290, droop: 0, curl: 0, under: -20, gill: 20, tilt: 0 },
+    ring: { at: 0.76, drop: 100, flare: 1.33 }, volva: { w: 190, mid: -90, lip: -40 }, warts: { spread: 1, size: 1 },
+  },
+  {
+    at: 9600, colour: '#b8321a', stemColour: '#e8e2d2',
+    stem: { base: [0, 0], c1: [-5, -330], c2: [25, -640], top: [37, -860], widths: [175, 92, 85] },
+    cap: { w: 559, h: 290, droop: 0, curl: 0, under: -20, gill: 20, tilt: 0 },
+    ring: { at: 0.76, drop: 100, flare: 1.33 }, volva: { w: 190, mid: -90, lip: -40 }, warts: { spread: 1, size: 1 },
+  },
+  {
+    at: 11200, colour: '#c25a22', stemColour: '#e2d9c3',
+    stem: { base: [0, 0], c1: [-5, -340], c2: [30, -660], top: [46, -880], widths: [170, 86, 78] },
+    cap: { w: 610, h: 150, droop: -70, curl: -12, under: -50, gill: 22, tilt: 3 },
+    ring: { at: 0.76, drop: 70, flare: 1.1 }, volva: { w: 186, mid: -84, lip: -36 }, warts: { spread: 1.08, size: 0.75 },
+  },
+  {
+    at: 12700, easing: sag, colour: '#8c5532', stemColour: '#cdbf9f',
+    stem: { base: [0, 0], c1: [-10, -320], c2: [80, -600], top: [250, -640], widths: [165, 78, 66] },
+    cap: { w: 460, h: 110, droop: 50, curl: 0, under: -10, gill: 14, tilt: 55 },
+    ring: { at: 0.7, drop: 60, flare: 0.9 }, volva: { w: 180, mid: -78, lip: -30 }, warts: { fallen: true, size: 0.7 },
+  },
+  {
+    at: 13900, colour: '#5e4130', stemColour: '#a8987a',
+    stem: { base: [0, 0], c1: [80, -60], c2: [240, -60], top: [400, -40], widths: [120, 58, 50] },
+    cap: { w: 280, h: 50, droop: 10, curl: 0, under: 0, gill: 6, tilt: 8 },
+    ring: { at: 0.6, drop: 20, flare: 0.8 }, volva: { w: 150, mid: -40, lip: -10 }, warts: { fallen: true, size: 0.5 },
+  },
+  {
+    at: 15100, colour: '#4f3b2c', stemColour: '#4f3b2c',
+    stem: { base: [0, 60], c1: [80, 60], c2: [240, 60], top: [400, 70], widths: [100, 40, 30] },
+    cap: { w: 200, h: 10, droop: 4, curl: 0, under: 0, gill: 0, tilt: 0 },
+    ring: { at: 0.6, drop: 10, flare: 0.8 }, volva: { w: 120, mid: 60, lip: 50 }, warts: { fallen: true, size: 0 },
+  },
+];
+stages.push({ ...stages[0], at: CYCLE });
+
+const add = ([x, y], [dx, dy]) => [x + dx, y + dy];
+const lerp = (a, b, t) => a + (b - a) * t;
+const toPath = (commands) => `path("${commands.map((item) => (typeof item === 'string' ? item : item.map((n) => n.toFixed(1)).join(' '))).join(' ')}")`;
+
+function bezier([p0, p1, p2, p3], t) {
+  const s = 1 - t;
+  return [0, 1].map((i) => s * s * s * p0[i] + 3 * s * s * t * p1[i] + 3 * s * t * t * p2[i] + t * t * t * p3[i]);
+}
+
+const centreline = ({ base, c1, c2, top }) => [base, c1, c2, top];
+
+function stemPath({ stem }) {
+  const line = centreline(stem);
+  const [wb, wm, wt] = stem.widths;
+  const right = line.map((p, i) => add(p, [[wb, wm, wm, wt][i], 0]));
+  const left = line.map((p, i) => add(p, [-[wb, wm, wm, wt][i], 0]));
+  return toPath(['M', right[0], 'C', right[1], right[2], right[3], 'L', left[3], 'C', left[2], left[1], left[0], 'Z']);
+}
+
+// The shaded right flank of the stem: the same outline pulled in from the left.
+function stemShadePath({ stem }) {
+  const line = centreline(stem);
+  const [wb, wm, wt] = stem.widths;
+  const right = line.map((p, i) => add(p, [[wb, wm, wm, wt][i], 0]));
+  const inner = line.map((p, i) => add(p, [[wb, wm, wm, wt][i] * 0.35, 0]));
+  return toPath(['M', right[0], 'C', right[1], right[2], right[3], 'L', inner[3], 'C', inner[2], inner[1], inner[0], 'Z']);
+}
+
+function capFrame({ stem, cap }) {
+  const [x, y] = stem.top;
+  const centre = [x - 5, y + 40 * Math.min(1, cap.h / 290)];
+  const angle = (cap.tilt * Math.PI) / 180;
+  const place = ([dx, dy]) => [
+    centre[0] + dx * Math.cos(angle) - dy * Math.sin(angle),
+    centre[1] + dx * Math.sin(angle) + dy * Math.cos(angle),
+  ];
+  return { place, ...cap };
+}
+
+function capPath(stage) {
+  const { place, w, h, droop, curl, under } = capFrame(stage);
+  const rise = h + droop;
+  return toPath([
+    'M', place([w - curl, droop]),
+    'C', place([w, droop - 0.55 * rise]), place([0.55 * w, -h]), place([0, -h]),
+    'C', place([-0.55 * w, -h]), place([-w, droop - 0.55 * rise]), place([-w + curl, droop]),
+    'C', place([-0.55 * w, under]), place([-0.3 * w, under]), place([0, under]),
+    'C', place([0.3 * w, under]), place([0.55 * w, under]), place([w - curl, droop]),
+    'Z',
+  ]);
+}
+
+// A soft highlight on the upper left of the dome, shaped by the same pose.
+function capLightPath(stage) {
+  const { place, w, h, droop } = capFrame(stage);
+  const top = -h * 0.94, edge = lerp(droop, -h, 0.45);
+  return toPath([
+    'M', place([-0.78 * w, edge]),
+    'C', place([-0.7 * w, top]), place([-0.2 * w, top - 0.04 * h]), place([0.25 * w, top + 0.02 * h]),
+    'C', place([-0.1 * w, top + 0.12 * h]), place([-0.5 * w, top + 0.2 * h]), place([-0.78 * w, edge]),
+    'Z',
+  ]);
+}
+
+function gillsPath(stage) {
+  const { place, w, droop, curl, under, gill } = capFrame(stage);
+  const edge = w - curl;
+  return toPath([
+    'M', place([-edge, droop]),
+    'C', place([-0.55 * w, under]), place([-0.3 * w, under]), place([0, under]),
+    'C', place([0.3 * w, under]), place([0.55 * w, under]), place([edge, droop]),
+    'L', place([edge - 0.06 * w, droop + gill]),
+    'C', place([0.5 * w, under + gill]), place([0.25 * w, under + gill * 0.8]), place([0, under + gill * 0.8]),
+    'C', place([-0.25 * w, under + gill * 0.8]), place([-0.5 * w, under + gill]), place([-edge + 0.06 * w, droop + gill]),
+    'Z',
+  ]);
+}
+
+function ringPath(stage) {
+  const { stem, ring } = stage;
+  let top, topW, bottom, bottomW;
+  if (ring.veil) {
+    const { place, w, droop, curl } = capFrame(stage);
+    top = add(stem.top, [0, 20]);
+    topW = stem.widths[2];
+    bottom = place([0, droop + 4]);
+    bottomW = w - curl;
+  } else {
+    top = bezier(centreline(stem), ring.at);
+    topW = lerp(stem.widths[1], stem.widths[2], ring.at) * 1.05;
+    bottom = add(top, [-6, ring.drop]);
+    bottomW = topW * ring.flare;
+  }
+  const drop = bottom[1] - top[1];
+  const [topL, topR] = [add(top, [-topW, 0]), add(top, [topW, 0])];
+  const [bottomL, bottomR] = [add(bottom, [-bottomW, 0]), add(bottom, [bottomW, 0])];
+  return toPath([
+    'M', topL, 'L', topR,
+    'C', add(topR, [6, drop * 0.4]), add(bottomR, [0, -drop * 0.3]), bottomR,
+    'C', add(bottomR, [-bottomW * 0.4, 14]), add(bottomL, [bottomW * 0.4, 14]), bottomL,
+    'C', add(bottomL, [0, -drop * 0.3]), add(topL, [-6, drop * 0.4]), topL,
+    'Z',
+  ]);
+}
+
+function volvaPath({ stem, volva }) {
+  const [x] = stem.base;
+  const { w, mid, lip } = volva;
+  const left = [x - w, mid], right = [x + w, mid], bottom = [x, 60], top = [x, lip];
+  const rise = mid - lip;
+  return toPath([
+    'M', left,
+    'C', [x - w, 20], [x - 0.6 * w, 60], bottom,
+    'C', [x + 0.6 * w, 60], [x + w, 20], right,
+    'C', [x + w, mid - 0.55 * rise], [x + 0.5 * w, lip], top,
+    'C', [x - 0.5 * w, lip], [x - w, mid - 0.55 * rise], left,
+    'Z',
+  ]);
+}
+
+// Each wart remembers where it sits on the mature cap, as a fraction across (u) and up the dome (v).
+const spots = [
+  [12, -1070, 30], [202, -1050, 26], [-188, -1030, 28], [362, -990, 30], [-348, -960, 24], [92, -990, 34],
+  [-88, -940, 22], [252, -930, 25], [472, -900, 20], [-438, -880, 18], [-248, -890, 26], [132, -880, 20],
+  [372, -875, 17], [-28, -880, 16],
+].map(([x, y, r]) => {
+  const u = (x - 32) / 559;
+  return { u, v: (-820 - y) / (290 * Math.sqrt(1 - u * u)), r };
+});
+
+function wartFrame(stage, { u, v, r }) {
+  const { place, w, h, droop, curl } = capFrame(stage);
+  const { spread = 1, fallen, size } = stage.warts;
+  if (fallen) {
+    const [x] = place([u * w, 0]);
+    return { translate: `${(x + u * 40).toFixed(1)}px ${(8 - r * 0.3).toFixed(1)}px`, scale: `${r * size} ${r * size * 0.45}` };
+  }
+  const across = u * lerp(0.45, 1, spread), up = lerp(0.88, v, spread);
+  const dome = -h * Math.sqrt(1 - across * across) * up + droop * across * across * (1 - up);
+  const [x, y] = place([across * (w - curl), dome + r * size * 0.3]);
+  return { translate: `${x.toFixed(1)}px ${y.toFixed(1)}px`, scale: `${r * size} ${r * size * 0.8}` };
+}
+
+// A pose part-way between two stages, for events that happen inside a transition.
+function between(a, b, f) {
+  if (typeof a === 'number') return lerp(a, b, f);
+  if (Array.isArray(a)) return a.map((value, i) => between(value, b[i], f));
+  return Object.fromEntries(Object.keys(a).map((key) => [key, between(a[key], b[key], f)]));
+}
+
+const keyframes = (frame) => stages.map((stage) => ({ offset: stage.at / CYCLE, easing: stage.easing ?? easeInOut, ...frame(stage) }));
+
+function play(element, frames) {
+  element.animate(frames, { duration: calm ? CYCLE * 3 : CYCLE, iterations: Infinity });
+}
+
+const morph = (element, frame) => play(element, keyframes(frame));
+
+// As the cap ages the warts loosen one by one, the outermost first, and drop to the soil.
+function wartFrames(spot) {
+  const frames = keyframes((stage) => wartFrame(stage, spot));
+  const fall = stages.findIndex((stage) => stage.warts.fallen);
+  const [before, after] = [stages[fall - 1], stages[fall]];
+  const f = 0.1 + 0.55 * (1 - Math.abs(spot.u));
+  const letGo = lerp(before.at, after.at, f);
+  const pose = { stem: between(before.stem, after.stem, f), cap: between(before.cap, after.cap, f), warts: before.warts };
+  frames.splice(fall, 0,
+    { offset: letGo / CYCLE, easing: gravity, ...wartFrame(pose, spot) },
+    { offset: (letGo + 380) / CYCLE, easing: easeInOut, ...wartFrame(after, spot) });
+  return frames;
+}
+
+const part = (selector) => document.querySelector(selector);
+morph(part('.stem'), (stage) => ({ d: stemPath(stage), fill: stage.stemColour }));
+morph(part('.stem-shade'), (stage) => ({ d: stemShadePath(stage), opacity: stage.stem.widths[0] > 100 ? 1 : 0 }));
+morph(part('.ring'), (stage) => ({ d: ringPath(stage) }));
+morph(part('.gills'), (stage) => ({ d: gillsPath(stage) }));
+morph(part('.cap'), (stage) => ({ d: capPath(stage), fill: stage.colour }));
+morph(part('.cap-light'), (stage) => ({ d: capLightPath(stage) }));
+morph(part('.volva'), (stage) => ({ d: volvaPath(stage) }));
+morph(part('.shadow'), (stage) => ({ transform: `scale(${(Math.max(stage.cap.w, stage.volva.w) / 300).toFixed(2)}, 1)` }));
+for (const spot of spots) {
+  const wart = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  wart.setAttribute('r', 1);
+  wart.classList.add('wart');
+  part('.warts').append(wart);
+  play(wart, wartFrames(spot));
+}
+</script>
+</body>
+</html>

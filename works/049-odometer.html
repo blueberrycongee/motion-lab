@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Odometer</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    display: grid; place-items: center;
+    background: radial-gradient(110% 90% at 50% 40%, #b3b6a8, #8f9384 75%);
+  }
+  /* A cast housing; each slot is 0.68 times as wide as it is tall. */
+  .panel {
+    --h: min(calc(86vh / var(--rows)), calc(86vw / var(--cols) / 0.68));
+    display: grid; grid-template-columns: repeat(var(--cols), calc(var(--h) * 0.68));
+    grid-auto-rows: var(--h); padding: calc(var(--h) * 0.45); border-radius: calc(var(--h) * 0.3);
+    background: linear-gradient(#34322e, #24231f);
+    box-shadow: 0 calc(var(--h) * 0.08) 0 #4a4740 inset, 0 calc(var(--h) * 0.5) calc(var(--h) * 1.2) #2b2d2566;
+  }
+  .wheel {
+    position: relative; overflow: hidden; margin: calc(var(--h) * 0.05) calc(var(--h) * 0.035);
+    border-radius: calc(var(--h) * 0.06); background: #151412;
+    font: 700 calc(var(--h) * 0.58) / 1 system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Curvature: the drum falls into shadow above and below the window, with a glint across the glass. */
+  .wheel::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(#0d0c0bf2, #0d0c0b40 26%, #fff1 44%, #0000 56%, #0d0c0b40 74%, #0d0c0bf2);
+    box-shadow: 0 0 calc(var(--h) * 0.06) #000c inset;
+  }
+  .face {
+    position: absolute; left: 0; right: 0; top: 8%; height: 84%;
+    display: grid; place-items: center; box-shadow: 0 -1px 0 #0006 inset;
+  }
+</style>
+</head>
+<body>
+<div class="panel"></div>
+<script type="module">
+const COLS = 44, ROWS = 30;
+const CELL_H = 0.042, CELL_W = CELL_H * 0.68;   // mushroom units per slot
+const CYCLE = 13;
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Each drum is painted in ten bands. 9, 0, 1 and 2 are the dark ground, so a background
+// wheel can tick forward and stay dark; the rest carry the mushroom's colours.
+const FACES = [
+  ['#2a2723', '#8d8578'], ['#2e2a25', '#8d8578'], ['#2a2723', '#7a7368'],
+  ['#6e130b', '#e9b7a4'], ['#9c2614', '#f1d3c2'], ['#c13a1d', '#f7dccd'],
+  ['#efe7d6', '#6e130b'], ['#e8e2d2', '#5d564a'], ['#c9bea6', '#4a4339'],
+  ['#2e2a25', '#8d8578'],
+];
+const GROUND = [9, 0];
+
+// The canonical profile, sampled in mushroom units: y up, ground at 0, cap about 1.12 wide.
+const SPOTS = [
+  [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+  [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+  [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+  [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+];
+
+function ellipse(px, py, rx, ry) {
+  const k0 = Math.hypot(px / rx, py / ry);
+  const k1 = Math.hypot(px / (rx * rx), py / (ry * ry));
+  return k0 * (k0 - 1) / k1;
+}
+
+// Which drum face shows the mushroom at (x0, y), or null for the ground.
+function digitAt(x0, y) {
+  const x = x0 - 0.05 * y * y;
+  const r = Math.abs(x);
+  const under = 0.82 + 0.02 * (1 - Math.min(r * r / 0.3125, 1));
+  if (Math.max(ellipse(x, y - 0.8, 0.56, 0.31), under - y) < 0) {
+    // Warts are smaller than a slot, so they are sampled generously.
+    if (SPOTS.some(([sx, sy, sr]) => ((x0 - 0.032 - sx) / sr) ** 2 + ((y - sy) / (sr * 0.8)) ** 2 < 2.4)) return 6;
+    const axis = 0.56 * Math.sqrt(Math.max(0, 1 - ((y - 0.8) / 0.31) ** 2));
+    return axis < 0.3 ? 3 : axis < 0.46 ? 4 : 5;
+  }
+  const gillTop = 0.8 + 0.015 * (1 - Math.min(r * r / 0.27, 1));
+  if (Math.max(r - 0.55, y - under, gillTop - y) < 0) return 8;
+  const ring = Math.max(r - 0.096 - (0.66 - y) * 0.32, Math.abs(y - 0.605) - 0.05);
+  const stemR = 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  const stem = Math.max(r - stemR, Math.abs(y - 0.43) - 0.43);
+  if (Math.min(ring, stem) < 0) return x > 0.04 ? 8 : 7;
+  return null;
+}
+
+const random = (a, b) => a + Math.random() * (b - a);
+const panel = document.querySelector('.panel');
+panel.style.setProperty('--cols', COLS);
+panel.style.setProperty('--rows', ROWS);
+
+const wheels = [];
+for (let row = 0; row < ROWS; row++) {
+  for (let col = 0; col < COLS; col++) {
+    const x = (col + 0.5 - COLS / 2) * CELL_W + 0.03;
+    const y = (ROWS - 1.5 - row) * CELL_H;
+    const el = document.createElement('div');
+    el.className = 'wheel';
+    el.innerHTML = '<div class="face"></div><div class="face"></div>';
+    panel.append(el);
+    const target = digitAt(x, y);
+    wheels.push({
+      row, col, faces: [...el.children],
+      ground: target === null,
+      target: target ?? GROUND[Math.floor(Math.random() * 2)],
+      from: Math.floor(random(0, 10)),
+      speed: random(7, 12) * (calm ? 0.3 : 1),
+      up: 1.0 * row / ROWS + random(0, 0.25),
+      settle: 3 + 2.6 * (1 - row / ROWS) + random(0, 0.35),
+      ticks: [],
+    });
+  }
+}
+
+// While the image holds, spores drop from under the cap: a ground wheel ticks one digit
+// on, then the wheel below it, and so on down the column.
+const at = (col, row) => wheels[row * COLS + col];
+for (let i = 0; i < (calm ? 0 : 9); i++) {
+  let col = Math.floor(random(2, COLS - 2));
+  let row = wheels.find((w) => w.col === col && w.target === 8)?.row ?? 3;
+  let time = random(9, 11);
+  while (++row < ROWS) {
+    if (Math.random() < 0.25) col += Math.random() < 0.5 ? -1 : 1;
+    const wheel = at(Math.max(0, Math.min(COLS - 1, col)), row);
+    if (!wheel.ground || wheel.ticks.length >= 2) break;
+    wheel.ticks.push(time);
+    time += random(0.16, 0.26);
+  }
+}
+
+const smooth = (p) => p * p * (3 - 2 * p);
+
+// A detent catches the drum: it runs slightly past and springs back into the notch.
+function snap(seconds, entry) {
+  return calm ? 0 : entry / 22 * Math.exp(-9 * seconds) * Math.sin(22 * seconds);
+}
+
+// The drum's position in faces, `c` seconds into a cycle that starts from `from`.
+function position(wheel, c, from) {
+  if (c < wheel.up) return from;
+  const v = wheel.speed, entry = calm ? 0 : 2.4;
+  // Anticipation: it rocks back a little before it spins up.
+  const rock = 0.3, ramp = 0.6;
+  const spin = (tau) => {
+    if (tau < rock) return from - 0.18 * smooth(tau / rock);
+    const run = tau - rock;
+    if (run < ramp) return from - 0.18 + 0.5 * v / ramp * run * run;
+    return from - 0.18 + 0.5 * v * ramp + v * (run - ramp);
+  };
+  if (c < wheel.settle) return spin(c - wheel.up);
+  // Brake evenly and land exactly on the target face.
+  const start = spin(wheel.settle - wheel.up);
+  let distance = (v + entry) * (calm ? 1.2 : 0.75);
+  distance += ((wheel.target - start - distance) % 10 + 10) % 10;
+  const duration = 2 * distance / (v + entry);
+  const tau = c - wheel.settle;
+  if (tau < duration) return start + v * tau - (v - entry) * tau * tau / (2 * duration);
+  let p = start + distance + snap(tau - duration, entry);
+  for (const tick of wheel.ticks) {
+    const since = c - tick;
+    if (since > 0) p += 1 - Math.exp(-14 * since) * Math.cos(16 * since);
+  }
+  return p;
+}
+
+function show(face, digit, offset) {
+  const angle = offset * Math.PI / 5;   // ten faces round the drum
+  face.style.transform = `translateY(${(162 * Math.sin(angle)).toFixed(1)}%) scaleY(${Math.cos(angle).toFixed(3)})`;
+  if (face.dataset.digit !== String(digit)) {
+    face.dataset.digit = digit;
+    face.textContent = digit;
+    [face.style.background, face.style.color] = FACES[digit];
+  }
+}
+
+function frame(ms) {
+  const t = ms / 1000;
+  const cycle = Math.floor(t / CYCLE);
+  const c = t - cycle * CYCLE;
+  for (const wheel of wheels) {
+    const from = cycle === 0 ? wheel.from : wheel.target + wheel.ticks.length;
+    const p = position(wheel, c, from);
+    if (p === wheel.p) continue;
+    wheel.p = p;
+    const base = Math.floor(p);
+    show(wheel.faces[0], ((base % 10) + 10) % 10, base - p);
+    show(wheel.faces[1], (((base + 1) % 10) + 10) % 10, base + 1 - p);
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

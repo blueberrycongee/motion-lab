@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anatomy</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background:
+      radial-gradient(120% 90% at 50% 45%, transparent 55%, rgb(80 76 62 / 0.22)),
+      linear-gradient(rgb(64 92 104 / 0.13) 1px, transparent 1px) 0 0 / 20vmin 20vmin,
+      linear-gradient(90deg, rgb(64 92 104 / 0.13) 1px, transparent 1px) 0 0 / 20vmin 20vmin,
+      linear-gradient(rgb(64 92 104 / 0.06) 1px, transparent 1px) 0 0 / 4vmin 4vmin,
+      linear-gradient(90deg, rgb(64 92 104 / 0.06) 1px, transparent 1px) 0 0 / 4vmin 4vmin,
+      #e9e5d9;
+    perspective: var(--p);
+    perspective-origin: 50% 50%;
+  }
+  svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .scene { position: absolute; left: 50%; top: 50%; transform-style: preserve-3d; }
+  .scene i {
+    position: absolute; left: 0; top: 0; display: block;
+    transform-origin: 0 0;
+    backface-visibility: hidden;
+  }
+  .scene .wart { border-radius: 50%; }
+</style>
+</head>
+<body>
+<svg class="behind">
+  <defs><filter id="soft"><feGaussianBlur stdDeviation="8"/></filter></defs>
+  <ellipse class="contact" fill="rgb(70 62 44 / 0.28)" filter="url(#soft)"/>
+  <line class="axis" stroke="#4d6a74" stroke-dasharray="14 5 3 5"/>
+</svg>
+<div class="scene"></div>
+<svg class="leaders" fill="none" stroke="#2f3b3d" stroke-linecap="round"></svg>
+<script type="module">
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const clamp01 = (v) => Math.min(Math.max(v, 0), 1);
+const ease = (v) => v * v * (3 - 2 * v);
+const mix = (a, b, k) => a + (b - a) * k;
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const normalize = (v) => v.map((c) => c / Math.hypot(...v));
+const lean = (h) => 0.05 * h * h;
+
+// Camera space follows CSS: x right, y down, z towards the viewer.
+const LIGHT = normalize([-0.5, -0.65, 0.6]);
+const HALF = normalize([LIGHT[0], LIGHT[1], LIGHT[2] + 1]);
+// Warm light bounced up from the drafting paper, so undersides are not left in flat ambient.
+const BOUNCE = normalize([0.25, 0.9, 0.35]);
+// Faces are laid out at this many CSS px per mushroom unit before the camera scales them.
+const DENSITY = 400;
+const CYCLE = 14;
+
+// ---- 4x4 matrices, column-major like matrix3d() ----
+
+function multiply(a, b) {
+  const out = new Array(16);
+  for (let col = 0; col < 4; col++) {
+    for (let row = 0; row < 4; row++) {
+      out[col * 4 + row] = a[row] * b[col * 4] + a[4 + row] * b[col * 4 + 1] + a[8 + row] * b[col * 4 + 2] + a[12 + row] * b[col * 4 + 3];
+    }
+  }
+  return out;
+}
+const translate = (x, y, z) => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1];
+const scale = (k) => [k, 0, 0, 0, 0, k, 0, 0, 0, 0, k, 0, 0, 0, 0, 1];
+const rotateX = (a) => [1, 0, 0, 0, 0, Math.cos(a), Math.sin(a), 0, 0, -Math.sin(a), Math.cos(a), 0, 0, 0, 0, 1];
+const rotateY = (a) => [Math.cos(a), 0, -Math.sin(a), 0, 0, 1, 0, 0, Math.sin(a), 0, Math.cos(a), 0, 0, 0, 0, 1];
+const apply = (m, [x, y, z]) => [0, 1, 2].map((r) => m[r] * x + m[4 + r] * y + m[8 + r] * z + m[12 + r]);
+const turnOnly = (m, v) => [0, 1, 2].map((r) => m[r] * v[0] + m[4 + r] * v[1] + m[8 + r] * v[2]);
+
+// ---- Faces: each planar polygon becomes one clipped, matrix-placed element ----
+
+const scene = document.querySelector('.scene');
+
+function face(part, points, color, options = {}) {
+  const [p00, p01, p11, p10] = points;
+  const top = sub(p01, p00);
+  const across = normalize(Math.hypot(...top) > 1e-6 ? top : sub(p11, p10));
+  const normal = normalize(cross(across, sub(p10, p00)));
+  const down = cross(normal, across);
+  const local = points.map((p) => [dot(sub(p, p00), across), dot(sub(p, p00), down)]);
+  const minA = Math.min(...local.map((l) => l[0])), minB = Math.min(...local.map((l) => l[1]));
+  // A margin lets each polygon grow a pixel past its neighbours, so anti-aliased seams do not show.
+  const margin = 2;
+  const width = (Math.max(...local.map((l) => l[0])) - minA) * DENSITY + 2 * margin;
+  const height = (Math.max(...local.map((l) => l[1])) - minB) * DENSITY + 2 * margin;
+  const px = local.map(([a, b]) => [(a - minA) * DENSITY + margin, (b - minB) * DENSITY + margin]);
+  const cx = px.reduce((s, p) => s + p[0], 0) / 4, cy = px.reduce((s, p) => s + p[1], 0) / 4;
+  const grown = px.map(([x, y]) => {
+    const d = Math.hypot(x - cx, y - cy) || 1;
+    return `${(x + ((x - cx) / d) * 1.2).toFixed(1)}px ${(y + ((y - cy) / d) * 1.2).toFixed(1)}px`;
+  });
+  const element = document.createElement('i');
+  if (options.className) element.className = options.className;
+  element.style.width = `${width.toFixed(1)}px`;
+  element.style.height = `${height.toFixed(1)}px`;
+  if (!options.className) element.style.clipPath = `polygon(${grown.join(', ')})`;
+  scene.append(element);
+  const shiftA = minA - margin / DENSITY, shiftB = minB - margin / DENSITY;
+  const origin = points[0].map((c, k) => c + shiftA * across[k] + shiftB * down[k]);
+  const k = 1 / DENSITY;
+  const half = options.spread ?? 0;
+  part.faces.push({
+    element,
+    color,
+    gloss: options.gloss ?? 0.12,
+    texture: options.texture ?? '',
+    place: [...across.map((c) => c * k), 0, ...down.map((c) => c * k), 0, ...normal.map((c) => c * k), 0, ...origin, 1],
+    // Normals at the polygon's left and right edges, so shading blends smoothly around the surface.
+    normals: [turnOnly(rotateY(-half), normal), turnOnly(rotateY(half), normal)],
+  });
+}
+
+const at = (r, h, angle, shift) => [shift + r * Math.sin(angle), -h, r * Math.cos(angle)];
+
+// Revolves a profile listed so that its surface faces outward when walked top to bottom.
+function lathe(part, profile, segments, color, options = {}) {
+  const shift = options.shift ?? (() => 0);
+  const step = (2 * Math.PI) / segments;
+  for (let row = 0; row < profile.length - 1; row++) {
+    const [r0, h0] = profile[row], [r1, h1] = profile[row + 1];
+    for (let k = 0; k < segments; k++) {
+      const a = k * step, b = a + step;
+      face(part, [at(r0, h0, a, shift(h0)), at(r0, h0, b, shift(h0)), at(r1, h1, b, shift(h1)), at(r1, h1, a, shift(h1))],
+        typeof color === 'function' ? color((h0 + h1) / 2) : color, { ...options, spread: step / 2 });
+    }
+  }
+}
+
+const reversed = (profile) => [...profile].reverse();
+
+function capPart(part) {
+  const dome = [0, 11, 22, 33, 43, 53, 62, 70, 77, 84, 90].map((d) => {
+    const phi = (d * Math.PI) / 180;
+    return [0.56 * Math.sin(phi), 0.82 + 0.31 * Math.cos(phi)];
+  });
+  const shift = () => lean(0.8);
+  // Rim #b8321a darkening to #6e130b at the crown.
+  const capColor = (h) => {
+    const k = clamp01((h - 0.82) / 0.31) ** 1.5;
+    return [mix(184, 110, k), mix(50, 19, k), mix(26, 11, k)];
+  };
+  lathe(part, [...dome, [0.548, 0.8]], 24, capColor, { gloss: 0.28, shift });
+  lathe(part, [[0.548, 0.8], [0.3, 0.825], [0, 0.84]], 24, [241, 235, 221], { shift });
+  for (let i = 0; i < 26; i++) {
+    const phi = 1.25 * ((i + 0.6) / 26) ** 0.85, angle = i * 2.39996;
+    const r = 0.56 * Math.sin(phi), h = 0.82 + 0.31 * Math.cos(phi);
+    const normal = normalize([Math.sin(phi) / 0.56 * Math.sin(angle), -Math.cos(phi) / 0.31, Math.sin(phi) / 0.56 * Math.cos(angle)]);
+    const across = [Math.cos(angle), 0, -Math.sin(angle)];
+    const down = cross(normal, across);
+    const size = 0.026 - 0.009 * (phi / 1.25);
+    const centre = at(r, h, angle, shift()).map((c, k) => c + normal[k] * 0.006);
+    const corner = (u, v) => centre.map((c, k) => c + across[k] * u * size + down[k] * v * size * 0.8);
+    face(part, [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)], [239, 231, 214], { className: 'wart' });
+  }
+}
+
+function gillsPart(part) {
+  const shift = () => lean(0.8);
+  const lamellae = 'repeating-linear-gradient(90deg, rgb(112 96 70 / 0.4) 0 2px, transparent 2px 7px), ';
+  lathe(part, [[0.53, 0.775], [0.11, 0.8]], 28, [210, 198, 173], { shift, texture: lamellae });
+  lathe(part, [[0.11, 0.81], [0.53, 0.8]], 28, [236, 229, 214], { shift });
+  lathe(part, [[0.53, 0.8], [0.53, 0.775]], 28, [214, 203, 180], { shift });
+}
+
+function ringPart(part) {
+  const shift = () => lean(0.61);
+  const skirt = [[0.098, 0.66], [0.112, 0.62], [0.13, 0.555]];
+  lathe(part, skirt, 22, [221, 213, 194], { shift });
+  lathe(part, reversed(skirt.map(([r, h]) => [r - 0.01, h])), 22, [196, 186, 164], { shift });
+}
+
+function stemPart(part) {
+  const radius = (h) => 0.085 + 0.025 * (1 - h / 0.86) + 0.065 * Math.exp(-9 * h);
+  const profile = [0.86, 0.74, 0.6, 0.45, 0.3, 0.18, 0.09, 0.02].map((h) => [radius(h), h]);
+  lathe(part, profile, 18, [232, 226, 210], { shift: lean });
+  lathe(part, [[0, 0.86], [radius(0.86), 0.86]], 18, [243, 238, 227], { shift: lean });
+}
+
+function volvaPart(part) {
+  const cup = [[0.19, 0.17], [0.205, 0.1], [0.19, 0.03], [0.15, 0]];
+  lathe(part, cup, 20, [239, 231, 214]);
+  lathe(part, reversed(cup.slice(0, 3).map(([r, h]) => [r - 0.014, h])), 20, [214, 204, 184]);
+  lathe(part, [[0.15, 0], [0, 0]], 20, [220, 210, 190]);
+}
+
+// Exploded offsets along the axis, the order the parts leave in, and how far each one spins as it goes.
+const PARTS = [
+  { build: capPart, lift: 0.86, rank: 0, spin: 0.7, anchor: [0.456, 1.0, 1], leader: 0 },
+  { build: gillsPart, lift: 0.62, rank: 1, spin: -0.55, anchor: [0.47, 0.785, -1], leader: 1 },
+  { build: ringPart, lift: 0.36, rank: 2, spin: 0.5, anchor: [0.12, 0.6, 1], leader: 2 },
+  { build: stemPart, lift: 0, rank: -1, spin: 0, anchor: [0.098, 0.36, -1], leader: 3 },
+  { build: volvaPart, lift: -0.32, rank: 3, spin: -0.45, anchor: [0.205, 0.1, 1], leader: 4 },
+];
+for (const part of PARTS) {
+  part.faces = [];
+  part.build(part);
+}
+
+// ---- Choreography ----
+
+// 0 assembled, 1 exploded. Each part dips towards the others before it leaves (and lifts before it returns).
+function separation(t, rank) {
+  if (rank < 0) return 0;
+  const out = (t - 2 - 0.24 * rank) / 1.6;
+  const back = (t - 10.1 - 0.22 * (3 - rank)) / 1.6;
+  const wind = (u) => (calm ? 0 : 0.06 * Math.sin(Math.PI * clamp01(u / 0.3)));
+  if (back > 0) return 1 - ease(clamp01((back - 0.15) / 0.85)) + (back < 0.3 ? wind(back) : 0);
+  return ease(clamp01((out - 0.15) / 0.85)) - (out > 0 && out < 0.3 ? wind(out) : 0);
+}
+
+function leaderReach(t, index) {
+  const draw = clamp01((t - 3.9 - 0.2 * index) / 0.7);
+  const erase = clamp01((t - 9.2 - 0.1 * index) / 0.5);
+  return ease(draw) * (1 - ease(erase));
+}
+
+// ---- Rendering ----
+
+const leaders = document.querySelector('.leaders');
+const contact = document.querySelector('.contact');
+const axis = document.querySelector('.axis');
+for (const part of PARTS) {
+  part.path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  part.path.setAttribute('pathLength', '1');
+  part.dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  part.dot.setAttribute('fill', '#2f3b3d');
+  part.tag = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  leaders.append(part.path, part.dot, part.tag);
+}
+
+let width = 1, height = 1, perspective = 1;
+function resize() {
+  width = innerWidth;
+  height = innerHeight;
+  perspective = 3.2 * Math.min(width * 1.4, height);
+  document.body.style.setProperty('--p', `${perspective}px`);
+  for (const svg of document.querySelectorAll('svg')) svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+}
+addEventListener('resize', resize);
+resize();
+
+const project = ([x, y, z]) => {
+  const k = perspective / (perspective - z);
+  return [width / 2 + x * k, height / 2 + y * k];
+};
+
+function shade(base, normal, gloss) {
+  const diffuse = Math.max(dot(normal, LIGHT), 0);
+  const bounce = Math.max(dot(normal, BOUNCE), 0);
+  const spec = 255 * gloss * Math.max(dot(normal, HALF), 0) ** 24;
+  return `rgb(${base.map((c) => Math.min(255, c * (0.4 + 0.62 * diffuse + 0.36 * bounce) + spec).toFixed(0)).join(' ')})`;
+}
+
+function drawPart(part, camera, turn) {
+  const spin = rotateY(turn);
+  const model = multiply(camera, multiply(translate(0, -part.lift * part.open, 0), spin));
+  const turning = multiply(camera, spin);
+  const size = Math.hypot(camera[0], camera[1], camera[2]);
+  for (const f of part.faces) {
+    f.element.style.transform = `matrix3d(${multiply(model, f.place).map((v) => v.toFixed(5)).join(',')})`;
+    const [left, right] = f.normals.map((n) => normalize(turnOnly(turning, n).map((c) => c / size)));
+    f.element.style.background = `${f.texture}linear-gradient(90deg, ${shade(f.color, left, f.gloss)}, ${shade(f.color, right, f.gloss)})`;
+  }
+  return model;
+}
+
+// Leaders touch the surface on the side facing the viewer, so they never point at a hidden face.
+function drawLeader(part, model, turn, unit, reach) {
+  const [r, h, side] = part.anchor;
+  const angle = side * 0.95 - turn;
+  const [ax, ay] = project(apply(model, at(r, h, angle, lean(Math.min(h, 0.8)))));
+  const elbowX = width / 2 + side * 0.74 * unit, endX = width / 2 + side * 0.9 * unit;
+  const elbowY = ay - 0.07 * unit;
+  part.path.setAttribute('d', `M${ax.toFixed(1)} ${ay.toFixed(1)} L${elbowX.toFixed(1)} ${elbowY.toFixed(1)} L${endX.toFixed(1)} ${elbowY.toFixed(1)}`);
+  part.path.setAttribute('stroke-dasharray', `${reach.toFixed(3)} 1`);
+  part.path.setAttribute('stroke-width', Math.max(1, 0.004 * unit).toFixed(2));
+  part.dot.setAttribute('cx', ax.toFixed(1));
+  part.dot.setAttribute('cy', ay.toFixed(1));
+  part.dot.setAttribute('r', (0.009 * unit * clamp01(reach * 6)).toFixed(2));
+  part.tag.setAttribute('cx', (endX + side * 0.024 * unit).toFixed(1));
+  part.tag.setAttribute('cy', elbowY.toFixed(1));
+  part.tag.setAttribute('r', (0.024 * unit * ease(clamp01((reach - 0.8) / 0.2))).toFixed(2));
+  part.tag.setAttribute('stroke-width', Math.max(1, 0.004 * unit).toFixed(2));
+}
+
+function drawGuides(camera, open, unit) {
+  const low = -0.32 * open - 0.02;
+  const [gx, gy] = project(apply(camera, [0, -low, 0]));
+  contact.setAttribute('cx', gx.toFixed(1));
+  contact.setAttribute('cy', (gy + 0.03 * unit).toFixed(1));
+  contact.setAttribute('rx', (0.3 * unit).toFixed(1));
+  contact.setAttribute('ry', (0.05 * unit).toFixed(1));
+  const [x0, y0] = project(apply(camera, [0, 0.55, 0])), [x1, y1] = project(apply(camera, [0, -2.15, 0]));
+  axis.setAttribute('x1', x0.toFixed(1));
+  axis.setAttribute('y1', y0.toFixed(1));
+  axis.setAttribute('x2', x1.toFixed(1));
+  axis.setAttribute('y2', y1.toFixed(1));
+  axis.setAttribute('stroke-width', Math.max(1, 0.003 * unit).toFixed(2));
+  axis.setAttribute('opacity', (0.7 * ease(clamp01((open - 0.4) / 0.6))).toFixed(3));
+}
+
+function frame(now) {
+  const t = (now / 1000) % CYCLE;
+  for (const part of PARTS) part.open = separation(t, part.rank);
+  // The camera follows the part that is furthest out: the cap leaves first and returns last.
+  const open = clamp01(Math.max(...PARTS.map((p) => p.open)));
+  // Pull back and level the view as the parts spread, so the exploded stack still fits.
+  const unit = mix(Math.min(0.58 * height, 0.66 * width), Math.min(0.37 * height, 0.5 * width), ease(open));
+  const centre = mix(0.56, 0.83, ease(open));
+  const camera = multiply(scale(unit), multiply(rotateX(mix(-0.34, 0.12, ease(open))), translate(0, centre, 0)));
+  const base = (now / 1000) * (calm ? 0.12 : 0.32);
+  for (const part of PARTS) {
+    const turn = base + (calm ? 0 : part.spin * ease(clamp01(part.open)));
+    const model = drawPart(part, camera, turn);
+    drawLeader(part, model, turn, unit, leaderReach(t, part.leader));
+  }
+  drawGuides(camera, open, unit);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

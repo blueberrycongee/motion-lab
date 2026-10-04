@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Letters</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: radial-gradient(120% 90% at 50% 60%, #56603f, #3b4430 60%, #2c3324); }
+  .letter {
+    position: absolute; left: 0; top: 0;
+    width: var(--cell-w); height: var(--cell-h); line-height: var(--cell-h);
+    text-align: center; font: 700 var(--size) ui-serif, Georgia, 'Times New Roman', serif;
+    text-shadow: 0 0.05em 0.08em #1a1e1240;
+    will-change: transform, opacity;
+  }
+</style>
+</head>
+<body>
+<script type="module">
+const WORDS = 'amanita muscaria fly agaric toadstool red cap white warts universal veil gills ring '
+  + 'bulb volva birch pine spruce mycorrhiza autumn rain moss spores hyphae mycelium forest floor ';
+// Leaf litter on the ground, in autumn colours rather than the mushroom's.
+const LITTER = ['#b58b3a', '#8f4b26', '#c9a64a', '#6f5a2c'];
+const CELL_W = 0.026, CELL_H = 0.032;
+const BUILD = 5.2, HOLD = 3.4, GUST = 4.2, REST = 0.6;
+const CYCLE = BUILD + 2.6 + HOLD + GUST + REST;
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// The canonical profile, sampled in mushroom units: y up, ground at 0, cap about 1.12 wide.
+const SPOTS = [
+  [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+  [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+  [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+  [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+];
+
+function ellipse(px, py, rx, ry) {
+  const k0 = Math.hypot(px / rx, py / ry);
+  const k1 = Math.hypot(px / (rx * rx), py / (ry * ry));
+  return k0 * (k0 - 1) / k1;
+}
+
+function partAt(x0, y) {
+  const x = x0 - 0.05 * y * y;
+  const r = Math.abs(x);
+  const under = 0.82 + 0.02 * (1 - Math.min(r * r / 0.3125, 1));
+  if (Math.max(ellipse(x, y - 0.8, 0.56, 0.31), under - y) < 0) {
+    const onSpot = SPOTS.some(([sx, sy, sr]) => ((x0 - 0.032 - sx) / sr) ** 2 + ((y - sy) / (sr * 0.8)) ** 2 < 2);
+    return onSpot ? 'spot' : 'cap';
+  }
+  const gillTop = 0.8 + 0.015 * (1 - Math.min(r * r / 0.27, 1));
+  if (Math.max(r - 0.55, y - under, gillTop - y) < 0) return 'gills';
+  if (Math.max(r - 0.096 - (0.66 - y) * 0.32, Math.abs(y - 0.605) - 0.05) < 0) return 'ring';
+  const stemR = 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  if (Math.max(r - stemR, Math.abs(y - 0.43) - 0.43) < 0) return 'stem';
+  return null;
+}
+
+function mix(a, b, t) {
+  const ca = a.match(/\w\w/g).map((h) => parseInt(h, 16));
+  const cb = b.match(/\w\w/g).map((h) => parseInt(h, 16));
+  return `rgb(${ca.map((c, i) => Math.round(c + (cb[i] - c) * t)).join()})`;
+}
+
+// Seen from the side, the cap's distance from the stem axis depends only on height,
+// so the crown darkens towards the top as it does on the 3D specimen.
+function colorOf(part, y) {
+  if (part === 'cap') {
+    const axis = 0.56 * Math.sqrt(Math.max(0, 1 - ((y - 0.8) / 0.31) ** 2));
+    return mix('7e170d', 'c63d1e', Math.min(1, Math.max(0, (axis - 0.12) / 0.4)));
+  }
+  return { spot: '#f2ead9', gills: '#d2c6ad', ring: '#ddd5c2', stem: '#e8e2d2' }[part];
+}
+
+const random = (a, b) => a + Math.random() * (b - a);
+const letters = [];
+let next = 0;
+function addLetter(x, y, color, rank) {
+  const el = document.createElement('span');
+  el.className = 'letter';
+  while (WORDS[next % WORDS.length] === ' ') next++;
+  el.textContent = WORDS[next++ % WORDS.length].toUpperCase();
+  el.style.color = color;
+  document.body.append(el);
+  letters.push({
+    el, x, y, rank,
+    tilt: random(-14, 14), size: random(0.9, 1.12),
+    fall: random(1.9, 2.7), lag: random(0, 0.5), drift: random(-0.3, 0.3),
+    swing: random(0.06, 0.18), pace: random(3.2, 5.2), phase: random(0, 6.28),
+    tumble: Math.random() < 0.3 ? Math.round(random(1, 3)) * (Math.random() < 0.5 ? -1 : 1) : 0,
+    gustLag: random(0, 0.4), spin: random(-540, 540), lift: random(0.1, 0.5),
+  });
+}
+
+// Fill the silhouette cell by cell; the words read along the rows like a printed page.
+for (let y = 1.11; y > 0; y -= CELL_H) {
+  for (let x = -0.56; x < 0.66; x += CELL_W) {
+    const part = partAt(x, y);
+    if (part) addLetter(x, y, colorOf(part, y), y + random(0, 0.12));
+  }
+}
+for (let i = 0; i < 70; i++) {
+  const side = Math.random() < 0.5 ? -1 : 1;
+  addLetter(side * (0.14 + 0.75 * Math.random() ** 2) + 0.03, random(0, 0.02), LITTER[i % LITTER.length], random(-0.1, 0.05));
+}
+letters.sort((a, b) => a.rank - b.rank);
+letters.forEach((letter, i) => { letter.start = BUILD * (i / letters.length) ** 0.85 + letter.lag; });
+
+let scale, groundX, groundY;
+function resize() {
+  scale = Math.min(innerHeight * 0.66 / 1.11, innerWidth * 0.8 / 1.12);
+  groundX = innerWidth / 2 - 0.05 * scale;
+  groundY = innerHeight / 2 + 0.58 * scale;
+  document.body.style.setProperty('--cell-w', `${CELL_W * scale}px`);
+  document.body.style.setProperty('--cell-h', `${CELL_H * scale}px`);
+  document.body.style.setProperty('--size', `${CELL_H * scale * 1.22}px`);
+}
+addEventListener('resize', resize);
+resize();
+
+const easeOut = (p) => 1 - (1 - p) ** 1.8;
+
+// A falling leaf swings side to side, tilting into each swing, and slows as it lands.
+function falling(letter, t) {
+  const p = Math.min(1, (t - letter.start) / letter.fall);
+  const left = 1 - p;
+  const sky = groundY / scale + 0.15 + letter.swing;
+  const angle = letter.phase + letter.pace * (t - letter.start);
+  const sway = left ** 1.4;
+  const x = letter.x + letter.drift * left ** 2 + letter.swing * sway * Math.sin(angle);
+  const y = letter.y + (sky - letter.y) * (1 - easeOut(p)) + 0.012 * sway * Math.cos(2 * angle);
+  let rotate = letter.tilt + 38 * sway * Math.cos(angle) + letter.tumble * 360 * left ** 2;
+  // The landing rocks it once or twice before it lies still.
+  const since = t - letter.start - letter.fall;
+  if (since > 0) rotate += 9 * Math.sign(letter.tilt) * Math.exp(-6 * since) * Math.sin(15 * since);
+  return { x, y, rotate, opacity: 1 };
+}
+
+// The gust reaches the left side first and the top a beat before the base.
+function blowing(letter, t, gustAt) {
+  const leaves = gustAt + 0.9 * (letter.x + 0.9) / 1.8 + 0.25 * (1.11 - letter.y) + letter.gustLag;
+  const shiver = Math.min(1, Math.max(0, (t - leaves + 0.6) / 0.6));
+  const tau = Math.max(0, t - leaves);
+  return {
+    x: letter.x + 0.3 * tau + 0.9 * tau * tau,
+    y: letter.y + letter.lift * tau + 0.3 * tau * tau + 0.03 * Math.sin(5 * tau + letter.phase) * Math.min(tau, 1),
+    rotate: letter.tilt + 7 * shiver * Math.sin(38 * t + letter.phase) * (tau > 0 ? 0 : 1) + letter.spin * tau * (1 + tau) * 0.5,
+    opacity: 1 - Math.min(1, Math.max(0, (tau - 1.3) / 0.9)),
+  };
+}
+
+function quiet(letter, t, gustAt) {
+  const fadeIn = Math.min(1, Math.max(0, (t - letter.start) / 0.8));
+  const fadeOut = Math.min(1, Math.max(0, (t - gustAt - letter.rank * 1.5) / 0.8));
+  return { x: letter.x, y: letter.y, rotate: letter.tilt * 0.5, opacity: fadeIn * (1 - fadeOut) };
+}
+
+// Settled letters produce the same transform every frame; skip those writes.
+function place(letter, { x, y, rotate, opacity }) {
+  const left = groundX + x * scale - CELL_W * scale / 2;
+  const top = groundY - y * scale - CELL_H * scale / 2;
+  const transform = `translate(${left.toFixed(1)}px, ${top.toFixed(1)}px) rotate(${rotate.toFixed(1)}deg) scale(${letter.size})`;
+  if (transform === letter.transform && opacity === letter.opacity) return;
+  letter.transform = transform;
+  letter.opacity = opacity;
+  letter.el.style.transform = transform;
+  letter.el.style.opacity = opacity;
+}
+
+const gustAt = BUILD + 2.6 + HOLD;
+function frame(ms) {
+  const t = (ms / 1000) % CYCLE;
+  for (const letter of letters) {
+    if (calm) place(letter, quiet(letter, t, gustAt));
+    else if (t < letter.start) place(letter, { x: letter.x, y: 99, rotate: 0, opacity: 0 });
+    else if (t < gustAt - 1) place(letter, falling(letter, t));
+    else place(letter, blowing(letter, t, gustAt));
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

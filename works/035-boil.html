@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boil</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: radial-gradient(ellipse 80% 70% at 50% 45%, #f5eddc 45%, #e4d8bf 100%); }
+  svg { position: fixed; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .grain { mix-blend-mode: multiply; pointer-events: none; will-change: transform; }
+
+  .ink { fill: none; stroke: #2a2420; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
+  .ink.thin { stroke-width: 3.5; }
+  .pencil { fill: none; stroke: #8b8276; stroke-width: 2.5; opacity: 0.38; }
+  .hatch { fill: none; stroke: #2a2420; stroke-width: 2.6; stroke-linecap: round; opacity: 0.75; }
+  .paper { fill: #f3ebda; }
+  .spore { fill: #2a2420; }
+
+  /* Watercolour washes sit slightly off the ink, and pigment pools at their edges. */
+  .wash { translate: -10px 8px; stroke-width: 5; stroke-linejoin: round; }
+  .wash.cap { fill: #c4462b; stroke: #9e2c17; }
+  .wash.crown { fill: #8e2614; stroke: none; opacity: 0.45; }
+  .wash.gills { fill: #d8c9a8; stroke: #bba980; }
+  .wash.stem { fill: #e7dcc4; stroke: #d3c5a6; }
+  .wash.ring { fill: #e3d6bc; stroke: #c9b994; }
+  .wash.shadow { fill: #b9ab90; stroke: none; opacity: 0.45; }
+
+  .figure, .head, .ring-rig, .cast-shadow, .spores > *, .puff circle, .mote, .speed-lines { transform-box: view-box; }
+  .spores > *, .puff circle, .mote, .speed-lines { opacity: 0; }
+</style>
+</head>
+<body>
+<svg class="grain" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+  <filter id="tooth" x="0" y="0" width="1" height="1">
+    <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="4"/>
+    <feColorMatrix values="0 0 0 0 0.45  0 0 0 0 0.4  0 0 0 0 0.32  0 0 0 -0.9 0.62"/>
+  </filter>
+  <rect width="1000" height="1000" filter="url(#tooth)"/>
+</svg>
+
+<svg viewBox="-660 -1360 1400 1620" aria-hidden="true">
+  <defs>
+    <!-- The boil: the same drawing re-traced with a slightly different wobble on every frame. -->
+    <filter id="boil" filterUnits="userSpaceOnUse" x="-1600" y="-2000" width="3200" height="3000">
+      <feTurbulence type="fractalNoise" baseFrequency="0.011" numOctaves="2" seed="1"/>
+      <feDisplacementMap in="SourceGraphic" scale="10" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <clipPath id="clip-stem">
+      <path d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+    </clipPath>
+    <clipPath id="clip-stem-shade"><path class="stem-shade"/></clipPath>
+    <clipPath id="clip-cap">
+      <path d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+    </clipPath>
+    <!-- Light from the upper left leaves a crescent of shade on the right of the cap. -->
+    <clipPath id="clip-cap-shade">
+      <path clip-rule="evenodd" d="M-700 -1250 H700 V-700 H-700 Z M-560 -872 A520 292 0 1 0 480 -872 A520 292 0 1 0 -560 -872 Z"/>
+    </clipPath>
+    <clipPath id="clip-ground-shade"><ellipse cx="200" cy="8" rx="250" ry="26"/></clipPath>
+  </defs>
+
+  <g filter="url(#boil)">
+    <g class="ground">
+      <path class="ink" d="M-690 4 Q-560 -4 -420 2 T-205 -2"/>
+      <path class="ink" d="M196 -1 Q330 6 470 0 T690 3"/>
+      <path class="ink thin" d="M-610 34 L-540 33 M-300 46 L-250 45 M380 40 L470 41 M560 28 L600 27"/>
+      <path class="ink thin" d="M-436 0 Q-446 -40 -470 -62 M-428 0 Q-424 -50 -410 -78 M-420 1 Q-400 -30 -376 -42"/>
+      <path class="ink thin" d="M412 1 Q404 -34 386 -50 M420 1 Q424 -42 440 -64"/>
+      <path class="ink thin" d="M520 2 Q524 -22 548 -24 Q572 -24 576 2"/>
+      <g class="cast-shadow">
+        <ellipse class="wash shadow" cx="200" cy="8" rx="250" ry="26"/>
+        <g class="hatch-ground" clip-path="url(#clip-ground-shade)"></g>
+      </g>
+    </g>
+
+    <g class="figure">
+      <path class="pencil" d="M-6 60 Q10 -560 64 -1200 M-210 10 Q-90 -440 -60 -880 M210 10 Q110 -440 135 -880"/>
+      <path class="wash stem" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+      <g clip-path="url(#clip-stem)">
+        <g class="hatch-stem-side" clip-path="url(#clip-stem-shade)"></g>
+        <g class="hatch-stem-bands"></g>
+      </g>
+      <path class="ink" d="M190 6 Q160 -34 140 -86 Q120 -150 114 -230 Q107 -340 108 -460 Q110 -620 116 -731 L121 -830"/>
+      <path class="ink" d="M-192 4 Q-160 -30 -137 -86 Q-118 -150 -110 -215 Q-95 -330 -84 -480 Q-66 -680 -52 -830"/>
+
+      <g class="ring-rig">
+        <path class="wash ring" d="M-76 -655 L119 -655 L132 -605 L145 -555 Q119 -538 93 -555 Q67 -538 41 -555 Q16 -538 -10 -555 Q-36 -538 -62 -555 Q-88 -538 -114 -555 L-95 -605 Z"/>
+        <path class="ink" d="M-82 -655 L124 -656 M119 -655 Q130 -605 147 -553 M-76 -655 Q-92 -605 -116 -553"/>
+        <path class="ink" d="M-114 -555 Q-88 -538 -62 -555 Q-36 -538 -10 -555 Q16 -538 41 -555 Q67 -538 93 -555 Q119 -538 145 -555"/>
+        <path class="ink thin" d="M-62 -556 Q-60 -600 -40 -640 M-10 -556 L0 -630 M41 -556 Q46 -600 60 -632 M93 -556 Q96 -590 104 -612"/>
+      </g>
+
+      <g class="head">
+        <path class="pencil" d="M-560 -900 A572 296 0 0 0 40 -540 A572 296 0 0 0 600 -780"/>
+        <path class="wash gills" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+        <path class="ink thin gill-lines"/>
+        <path class="ink" d="M-532 -824 L-488 -800 Q32 -832 552 -800 L588 -824"/>
+        <path class="wash cap" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+        <path class="wash crown" d="M-300 -1010 Q-180 -1110 40 -1118 Q300 -1110 420 -1000 Q300 -1050 60 -1056 Q-160 -1052 -300 -1010 Z"/>
+        <g clip-path="url(#clip-cap)">
+          <g class="hatch-cap" clip-path="url(#clip-cap-shade)"></g>
+        </g>
+        <g class="spots"></g>
+        <path class="ink" d="M604 -818 A560 310 0 1 0 -527 -820"/>
+        <path class="ink" d="M-546 -816 Q32 -864 606 -824"/>
+      </g>
+    </g>
+
+    <g class="spores"></g>
+    <g class="puff"></g>
+    <path class="ink thin speed-lines" d="M-500 -1110 Q-430 -1220 -300 -1268 M-560 -1010 Q-520 -1090 -440 -1140 M-600 -900 Q-590 -950 -560 -990"/>
+    <circle class="ink thin mote" r="9"/>
+  </g>
+</svg>
+
+<script type="module">
+const SVG = 'http://www.w3.org/2000/svg';
+const CYCLE = 8400;
+const SNEEZE = 4220;
+const POSE = { skew: -7, sx: 1.08, sy: 0.9, tilt: 15, size: 0.96 };   // the instant of the sneeze
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const FRAME = calm ? 400 : 1000 / 12;   // hand-drawn animation runs "on twos"
+const easeInOut = 'cubic-bezier(0.45, 0, 0.55, 1)';
+const easeOut = 'cubic-bezier(0.15, 0.7, 0.3, 1)';
+const snap = 'cubic-bezier(0.7, 0, 1, 0.6)';
+
+// A small seeded generator, so every loop draws the same strokes.
+let seed = 35;
+function random() {
+  seed = (seed + 0x6d2b79f5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+function draw(parent, tag, attributes) {
+  const element = document.createElementNS(SVG, tag);
+  for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+  parent.append(element);
+  return element;
+}
+
+// Loose parallel strokes across a box; a clip path gives them their shape.
+function hatch(group, [x0, y0, x1, y1], spacing, slant) {
+  const rise = (y1 - y0) * slant;
+  let d = '';
+  for (let x = x0 - Math.abs(rise); x < x1 + Math.abs(rise); x += spacing * (0.75 + 0.5 * random())) {
+    d += `M${x.toFixed(1)} ${(y1 + 12 * random()).toFixed(1)} L${(x + rise).toFixed(1)} ${(y0 - 12 * random()).toFixed(1)}`;
+  }
+  draw(group, 'path', { d, class: 'hatch' });
+}
+
+// The stem's edge on one side at height h above the ground, from the canonical profile.
+function stemEdge(side, h) {
+  const t = h / 1000;
+  return 1000 * (0.05 * t * t + side * (0.085 + 0.025 * (1 - t / 0.86) + 0.065 * Math.exp(-t * 9)));
+}
+
+function shadeStem() {
+  const heights = Array.from({ length: 22 }, (_, i) => i * 40);
+  const outer = heights.map((h) => [stemEdge(1, h) + 20, -h]);
+  const inner = heights.map((h) => [stemEdge(1, h) - 0.4 * (stemEdge(1, h) - stemEdge(-1, h)), -h]).reverse();
+  document.querySelector('.stem-shade').setAttribute('d', `M${[...outer, ...inner].join('L')}Z`);
+  hatch(document.querySelector('.hatch-stem-side'), [0, -860, 200, 0], 15, 0.12);
+  const bands = document.querySelector('.hatch-stem-bands');
+  hatch(bands, [-120, -860, 160, -770], 13, 0.9);
+  hatch(bands, [-120, -860, 160, -790], 15, -0.9);
+  hatch(bands, [-130, -556, 170, -515], 14, 0.9);
+}
+
+function shadeCap() {
+  const group = document.querySelector('.hatch-cap');
+  hatch(group, [200, -1140, 620, -780], 17, 0.9);
+  hatch(group, [380, -1000, 620, -780], 19, -0.9);
+}
+
+function drawGills() {
+  let d = '';
+  for (let t = 0.04; t < 0.97; t += 0.035) {
+    const x = -518 + 1100 * t, top = -822 - 80 * t * (1 - t);
+    const lean = (x - 32) * 0.03;
+    d += `M${x.toFixed(1)} ${(top + 4).toFixed(1)} L${(x - lean).toFixed(1)} ${(top + 22 - 6 * random()).toFixed(1)}`;
+  }
+  document.querySelector('.gill-lines').setAttribute('d', d);
+}
+
+function drawSpots() {
+  const spots = [
+    [12, -1070, 30, 24], [202, -1050, 26, 21], [-188, -1030, 28, 22], [362, -990, 30, 24], [-348, -960, 24, 19],
+    [92, -990, 34, 27], [-88, -940, 22, 18], [252, -930, 25, 20], [472, -900, 20, 16], [-438, -880, 18, 14],
+    [-248, -890, 26, 21], [132, -880, 20, 16], [372, -875, 17, 14], [-28, -880, 16, 13],
+  ];
+  const group = document.querySelector('.spots');
+  for (const [cx, cy, rx, ry] of spots) {
+    draw(group, 'ellipse', { cx, cy, rx: rx * 1.1, ry: ry * 1.1, class: 'ink thin paper' });
+  }
+}
+
+// Keyframes as [time in the cycle, properties, easing to the next key].
+function act(element, origin, keys) {
+  element.style.transformOrigin = origin;
+  element.animate(keys.map(([time, properties, easing = easeInOut]) => ({ offset: time / CYCLE, ...properties, easing })), {
+    duration: CYCLE, iterations: Infinity,
+  });
+}
+
+const figure = (skew, sx, sy) => ({ transform: `skewX(${skew}deg) scale(${sx}, ${sy})` });
+const turn = (degrees, size = 1) => ({ transform: `rotate(${degrees}deg) scale(${size})` });
+
+// Idle breathing, a tickle, two hitching breaths in, the sneeze, and a wobbling recovery.
+function sneeze() {
+  act(document.querySelector('.figure'), '0px 0px', [
+    [0, figure(0, 1, 1)], [900, figure(0, 0.992, 1.016)], [1800, figure(0, 1, 1)], [2700, figure(0, 1, 1)],
+    [3400, figure(4, 0.975, 1.045)], [3620, figure(2.5, 0.985, 1.03)], [4000, figure(6, 0.965, 1.07)],
+    [4130, figure(6.5, 0.96, 1.075), snap], [SNEEZE, figure(POSE.skew, POSE.sx, POSE.sy), easeOut],
+    [4430, figure(-2, 1.03, 0.975)], [4680, figure(2.5, 0.985, 1.025)], [4980, figure(-1, 1.008, 0.995)],
+    [5380, figure(0.4, 1, 1.003)], [5900, figure(0, 1, 1)], [CYCLE, figure(0, 1, 1)],
+  ]);
+  act(document.querySelector('.head'), '37px -845px', [
+    [0, turn(0)], [900, turn(-1, 1.005)], [1800, turn(0)], [2700, turn(0)], [3400, turn(-6, 1.015)],
+    [3620, turn(-4, 1.01)], [4000, turn(-10, 1.03)], [4130, turn(-11, 1.035), snap], [SNEEZE, turn(POSE.tilt, POSE.size), easeOut],
+    [4480, turn(5)], [4740, turn(-4)], [5040, turn(2)], [5440, turn(-0.6)], [6000, turn(0)], [CYCLE, turn(0)],
+  ]);
+  act(document.querySelector('.ring-rig'), '20px -655px', [
+    [0, turn(0)], [3400, turn(-2)], [4130, turn(-3), snap], [4300, turn(9), easeOut], [4520, turn(-6)],
+    [4780, turn(3)], [5080, turn(-1.2)], [5450, turn(0)], [CYCLE, turn(0)],
+  ]);
+  act(document.querySelector('.cast-shadow'), '0px 0px', [
+    [0, { scale: '1' }], [4000, { scale: '0.94 1' }], [4130, { scale: '0.94 1' }, snap], [SNEEZE, { scale: '1.12 1' }, easeOut],
+    [4600, { scale: '1' }], [CYCLE, { scale: '1' }],
+  ]);
+}
+
+// Where a point on the gills, from u = 0 at the left rim to 1 at the right, sits at the moment of the sneeze:
+// the head has tipped forward and the body is squashed and sheared towards the right.
+function underCapAtSneeze(u) {
+  const tilt = (POSE.tilt * Math.PI) / 180;
+  const dx = (-500 + 1060 * u - 37) * POSE.size, dy = 12;
+  const x = 37 + dx * Math.cos(tilt) - dy * Math.sin(tilt);
+  const y = (-845 + dx * Math.sin(tilt) + dy * Math.cos(tilt)) * POSE.sy;
+  return [x * POSE.sx + Math.tan((POSE.skew * Math.PI) / 180) * y, y];
+}
+
+const at = (x, y, extra = {}) => ({ translate: `${x.toFixed(1)}px ${y.toFixed(1)}px`, ...extra });
+
+function sprayOfSpores() {
+  const group = document.querySelector('.spores');
+  for (let i = 0; i < 44; i++) {
+    const [x, y] = underCapAtSneeze(0.45 + 0.55 * random());
+    const hollow = random() < 0.3;
+    const spore = hollow
+      ? draw(group, 'circle', { r: 6 + 4 * random(), class: 'ink thin' })
+      : draw(group, 'circle', { r: 3.5 + 4.5 * random(), class: 'spore' });
+    const direction = (0.05 + 0.4 * random()) * Math.PI, reach = 160 + 380 * random() ** 0.7;
+    const [flyX, flyY] = [x + Math.cos(direction) * reach, y + Math.sin(direction) * reach * 0.8];
+    const [driftX, driftY] = [flyX + 60 + 120 * random(), flyY - 120 - 160 * random()];
+    const start = SNEEZE + 60 * random(), settle = start + 300 + 200 * random(), gone = settle + 1800 + 1200 * random();
+    act(spore, '0px 0px', [
+      [0, at(x, y, { opacity: 0 })], [start - 1, at(x, y, { opacity: 0 })], [start, at(x, y, { opacity: 1 }), easeOut],
+      [settle, at(flyX, flyY, { opacity: 1 })], [gone, at(driftX, driftY, { opacity: 0 })], [CYCLE, at(driftX, driftY, { opacity: 0 })],
+    ]);
+  }
+}
+
+// A cartoon puff of air bursts out in front of the rim and shrinks away lobe by lobe. Each lobe is an ink circle
+// under a paper disc, so together they draw only the outline of the cloud.
+function puff() {
+  const [x, y] = underCapAtSneeze(0.95);
+  const outlines = draw(document.querySelector('.puff'), 'g', {});
+  const fills = draw(document.querySelector('.puff'), 'g', {});
+  const lobes = [[0, 0, 46], [58, -30, 38], [70, 34, 42], [130, 2, 34], [20, 56, 30], [118, -50, 24]];
+  lobes.forEach(([lx, ly, r], i) => {
+    const [cx, cy] = [x + 10 + lx, y + 40 + ly];
+    const born = SNEEZE + 30 * i;
+    for (const lobe of [draw(outlines, 'circle', { r: r + 3, class: 'spore' }), draw(fills, 'circle', { r, class: 'paper' })]) {
+      act(lobe, '0px 0px', [
+        [0, at(cx, cy, { scale: '0.2', opacity: 0 })], [born - 1, at(cx, cy, { scale: '0.2', opacity: 0 })],
+        [born, at(cx, cy, { scale: '0.3', opacity: 1 }), easeOut], [born + 320, at(cx + 40, cy - 6, { scale: '1', opacity: 1 })],
+        [born + 700, at(cx + 50, cy - 16, { scale: '0.8', opacity: 1 })], [born + 1000 + 60 * i, at(cx + 64, cy - 24, { scale: '0', opacity: 1 })],
+        [CYCLE, at(cx + 64, cy - 24, { scale: '0', opacity: 0 })],
+      ]);
+    }
+  });
+  act(document.querySelector('.speed-lines'), '0px 0px', [
+    [0, { opacity: 0 }], [SNEEZE - 1, { opacity: 0 }], [SNEEZE, { opacity: 1 }], [SNEEZE + 330, { opacity: 1 }],
+    [SNEEZE + 331, { opacity: 0 }], [CYCLE, { opacity: 0 }],
+  ]);
+}
+
+// A drifting mote tickles the gills and is drawn in by the first breath.
+function mote() {
+  act(document.querySelector('.mote'), '0px 0px', [
+    [0, at(-660, -470, { opacity: 0 })], [1100, at(-660, -470, { opacity: 0 })], [1300, at(-640, -500, { opacity: 1 })],
+    [1900, at(-530, -610, { opacity: 1 })], [2500, at(-450, -560, { opacity: 1 })], [3050, at(-340, -680, { opacity: 1 })],
+    [3400, at(-280, -690, { opacity: 1 }), 'ease-in'], [3640, at(-150, -790, { opacity: 1, scale: '0.4' })],
+    [3700, at(-140, -800, { opacity: 0, scale: '0' })], [CYCLE, at(-140, -800, { opacity: 0, scale: '0' })],
+  ]);
+}
+
+function breathe() {
+  act(document.querySelector('.figure'), '0px 0px', [
+    [0, figure(0, 1, 1)], [CYCLE / 2, figure(0, 0.994, 1.012)], [CYCLE, figure(0, 1, 1)],
+  ]);
+}
+
+// Every animation is stepped by hand, so the motion and the boil share the same drawn frames.
+function play() {
+  const turbulence = document.querySelector('#boil feTurbulence');
+  const animations = document.getAnimations();
+  animations.forEach((animation) => animation.pause());
+  let shown = -1;
+  requestAnimationFrame(function tick() {
+    const frame = Math.floor(performance.now() / FRAME);
+    if (frame !== shown) {
+      shown = frame;
+      turbulence.setAttribute('seed', 1 + (frame % 3));
+      animations.forEach((animation) => { animation.currentTime = frame * FRAME; });
+    }
+    requestAnimationFrame(tick);
+  });
+}
+
+shadeStem();
+shadeCap();
+hatch(document.querySelector('.hatch-ground'), [-60, -20, 460, 40], 16, 1.4);
+drawGills();
+drawSpots();
+if (calm) {
+  breathe();
+} else {
+  sneeze();
+  sprayOfSpores();
+  puff();
+  mote();
+}
+play();
+</script>
+</body>
+</html>

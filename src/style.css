@@ -1,0 +1,242 @@
+:root {
+  --wall: #ebebe9;
+  --ink: #161616;
+  --ink-soft: #77756f;
+  --frame: #171717;
+  --code-bg: #161616;
+  --code-line: #2a2a2a;
+  --code-ink: #b8b5ad;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-code: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --gutter: clamp(20px, 4vw, 56px);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--wall);
+  color: var(--ink);
+  font: 14px/1.5 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.site-header {
+  padding: 28px var(--gutter) 0;
+}
+
+.site-title {
+  font-size: 15px;
+}
+
+/* Frame: a thin dark moulding around the live canvas. */
+
+.frame {
+  border: 5px solid var(--frame);
+  box-shadow: 0 1px 1px rgb(0 0 0 / 0.18), 0 10px 20px -12px rgb(0 0 0 / 0.5);
+}
+
+.frame-canvas {
+  aspect-ratio: 4 / 3;
+  background: #262626 center / cover no-repeat;
+  overflow: hidden;
+}
+
+/* The iframe viewport rounds fractional sizes down; overshoot by 1px and clip
+   so no sliver of the backdrop shows at the edge. */
+.frame-canvas iframe {
+  display: block;
+  width: calc(100% + 1px);
+  height: calc(100% + 1px);
+  border: 0;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.frame-canvas iframe.ready {
+  opacity: 1;
+}
+
+.placard {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.placard-no {
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.placard-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Gallery */
+
+.gallery {
+  padding: 28px var(--gutter) 96px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 40px clamp(24px, 3vw, 40px);
+}
+
+.piece {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* The anchor receives the click; the live frame underneath stays non-interactive. */
+.piece iframe {
+  pointer-events: none;
+}
+
+.piece:hover .placard-title,
+.piece:focus-visible .placard-title {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.piece:focus-visible {
+  outline: none;
+}
+
+.piece:focus-visible .frame {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+
+/* Work detail */
+
+.work {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: clamp(28px, 4vw, 56px);
+  align-items: start;
+  padding: 28px var(--gutter) 48px;
+}
+
+.stage {
+  position: sticky;
+  top: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.stage-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.stage-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.btn {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.btn:hover {
+  color: var(--ink);
+  background: rgb(0 0 0 / 0.06);
+}
+
+.btn:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+.code {
+  background: var(--code-bg);
+}
+
+.code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 8px 8px 18px;
+  border-bottom: 1px solid var(--code-line);
+}
+
+.code-file {
+  color: var(--ink-soft);
+  font: 12px/1.5 var(--font-code);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code .btn {
+  color: var(--code-ink);
+}
+
+.code .btn:hover {
+  color: #f2f0ea;
+  background: rgb(255 255 255 / 0.08);
+}
+
+.code-body {
+  max-height: calc(100vh - 110px);
+  overflow: auto;
+}
+
+.code-body pre {
+  margin: 0;
+  padding: 16px 18px 24px;
+  background: transparent !important;
+  color: var(--code-ink);
+  font: 12px/1.65 var(--font-code);
+  tab-size: 2;
+}
+
+@media (max-width: 900px) {
+  .work {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stage {
+    position: static;
+  }
+
+  .code-body {
+    max-height: 70vh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .frame-canvas iframe,
+  .btn {
+    transition: none;
+  }
+}

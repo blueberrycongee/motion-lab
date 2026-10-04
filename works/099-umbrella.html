@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Umbrella</title>
+<style>
+  :root { --ground: 72%; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { position: relative; background: linear-gradient(#5d6c75, #8b989b var(--ground)); }
+  .ground {
+    position: absolute; inset: var(--ground) 0 0 0;
+    background: linear-gradient(#41463a, #2c3027 70%);
+    box-shadow: 0 -1px 0 #596052;
+  }
+  /* World units: one em is the mushroom's height; the origin is its foot. */
+  .stage { position: absolute; left: 50%; top: var(--ground); font-size: min(44vh, 36vw); }
+  .stage > * { position: absolute; left: 0; top: 0; }
+  .far { z-index: 0; }
+  .shroom { z-index: 1; }
+  .critter { z-index: 2; }
+  .near { z-index: 3; }
+
+  .lean { position: absolute; transform-origin: 0 0; }
+  .body {
+    position: absolute; left: -0.5345em; bottom: 0; width: 1.069em; height: 1em;
+    overflow: visible; transform-origin: 50% 100%;
+  }
+  .head { transform-box: fill-box; transform-origin: 50% 100%; }
+  .shadow {
+    position: absolute; left: -0.5em; top: -0.03em; width: 1em; height: 0.07em; border-radius: 50%;
+    background: radial-gradient(closest-side, #1a1d16a0, #1a1d1600);
+  }
+  .puddle {
+    position: absolute; top: -0.012em; height: 0.03em; border-radius: 50%;
+    background: radial-gradient(closest-side, #8d9ca0, #6b797c 70%, #6b797c00);
+  }
+  .drop {
+    position: absolute; left: -0.003em; top: -0.09em; width: max(1px, 0.006em); height: 0.09em;
+    background: linear-gradient(#e4ecee00, #e4ecee);
+    transform-origin: 50% 100%;
+  }
+  .splash {
+    position: absolute; left: -0.025em; top: -0.008em; width: 0.05em; height: 0.016em;
+    border: max(1px, 0.003em) solid #d2dcde; border-radius: 50%; box-sizing: border-box; opacity: 0;
+  }
+  .bead {
+    position: absolute; left: -0.008em; top: -0.008em; width: 0.016em; height: 0.016em;
+    border-radius: 50%; background: #d8e2e4;
+  }
+  .grass { position: absolute; left: 0; bottom: 0; transform-origin: 50% 100%; fill: #353a2d; }
+  .critter svg { position: absolute; bottom: -0.004em; overflow: visible; transform-origin: 50% 100%; }
+  .legs line { transform-box: fill-box; transform-origin: 50% 0; }
+</style>
+</head>
+<body>
+<div class="ground"></div>
+<div class="stage">
+  <div class="far"></div>
+  <div class="shroom">
+    <div class="shadow"></div>
+    <div class="lean">
+      <svg class="body" viewBox="-620 -1160 1240 1160">
+        <path fill="#e8e2d2" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+        <path fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+        <g class="head">
+          <path fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+          <path fill="url(#cap-shade)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+          <g fill="#efe7d6">
+            <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+            <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+            <ellipse cx="-188" cy="-1030" rx="28" ry="22"/>
+            <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+            <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+            <ellipse cx="92" cy="-990" rx="34" ry="27"/>
+            <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+            <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+            <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+            <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+            <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+            <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+            <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+            <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+          </g>
+        </g>
+        <defs>
+          <radialGradient id="cap-shade" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#6e130b"/>
+            <stop offset="1" stop-color="#b8321a"/>
+          </radialGradient>
+        </defs>
+      </svg>
+    </div>
+  </div>
+  <div class="near"></div>
+</div>
+<template id="ladybird">
+  <div class="critter">
+    <svg viewBox="0 0 100 64" style="width: 0.136em; height: 0.087em; left: -0.068em">
+      <g class="legs" stroke="#1c1a17" stroke-width="5" stroke-linecap="round">
+        <line x1="30" y1="50" x2="26" y2="63"/><line x1="50" y1="50" x2="50" y2="63"/><line x1="70" y1="50" x2="74" y2="63"/>
+      </g>
+      <circle cx="86" cy="42" r="12" fill="#1c1a17"/>
+      <circle cx="93" cy="38" r="2.5" fill="#efe7d6"/>
+      <path d="M8 52 A42 40 0 0 1 92 52 Z" fill="#a8261b"/>
+      <path d="M50 12 L50 52" stroke="#1c1a17" stroke-width="3"/>
+      <g fill="#1c1a17"><circle cx="30" cy="34" r="7"/><circle cx="66" cy="28" r="6"/><circle cx="72" cy="44" r="5"/><circle cx="20" cy="47" r="4"/></g>
+    </svg>
+  </div>
+</template>
+<template id="mouse">
+  <div class="critter">
+    <svg viewBox="0 0 170 92" style="width: 0.27em; height: 0.146em; left: -0.135em">
+      <path class="tail" d="M28 74 Q4 70 6 46 Q8 30 0 22" fill="none" stroke="#6b5849" stroke-width="4" stroke-linecap="round"/>
+      <ellipse cx="44" cy="86" rx="12" ry="5" fill="#6b5849"/>
+      <ellipse cx="112" cy="87" rx="10" ry="4.5" fill="#6b5849"/>
+      <ellipse cx="74" cy="60" rx="52" ry="28" fill="#8a7663"/>
+      <ellipse cx="78" cy="72" rx="40" ry="14" fill="#a39079"/>
+      <path d="M108 40 Q140 30 160 56 Q150 66 118 70 Z" fill="#8a7663"/>
+      <circle cx="160" cy="56" r="4" fill="#3a2e27"/>
+      <circle cx="118" cy="30" r="14" fill="#8a7663"/>
+      <circle cx="119" cy="31" r="8" fill="#b9958a"/>
+      <circle cx="138" cy="46" r="3.6" fill="#1c1714"/>
+    </svg>
+  </div>
+</template>
+<template id="snail">
+  <div class="critter">
+    <svg viewBox="0 0 140 100" style="width: 0.22em; height: 0.157em; left: -0.11em">
+      <path class="foot" d="M6 99 Q8 88 30 86 L104 84 Q118 82 122 64 L124 50 Q132 48 132 62 L130 82 Q130 99 112 99 Z" fill="#b1a385"/>
+      <path d="M121 54 L114 26 M127 54 L133 24" stroke="#b1a385" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="114" cy="25" r="3.5" fill="#3a2e27"/><circle cx="133" cy="23" r="3.5" fill="#3a2e27"/>
+      <circle class="shell" cx="62" cy="54" r="36" fill="#86572f"/>
+      <path d="M62 54 m0 -8 a8 8 0 1 1 -8 8 a16 16 0 0 1 16 -16 a24 24 0 0 1 24 24 a32 32 0 0 1 -32 32" fill="none" stroke="#5a381b" stroke-width="4" stroke-linecap="round"/>
+    </svg>
+  </div>
+</template>
+<script type="module">
+const stage = document.querySelector('.stage');
+const far = stage.querySelector('.far');
+const near = stage.querySelector('.near');
+const shroom = stage.querySelector('.shroom');
+const lean = shroom.querySelector('.lean');
+const body = shroom.querySelector('.body');
+const head = shroom.querySelector('.head');
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const CYCLE = 26;          // seconds: dry, shower, gusts, clearing, a shake, dry again
+const SHAKE_AT = 19.6;
+const FALL = calm ? 1.6 : 2.6;
+const DROPS = calm ? 50 : 170;
+const PROFILE = 1160;      // profile units per mushroom height
+const HEAD_PIVOT = [32 / PROFILE, -800 / PROFILE];
+
+const smooth = (a, b, x) => {
+  const k = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return k * k * (3 - 2 * k);
+};
+
+function weather(phase) {
+  const rain = smooth(3, 6, phase) * (1 - smooth(16.5, 19.5, phase));
+  const gust = 0.26 * Math.sin(phase * 0.7) + 0.12 * Math.sin(phase * 1.9 + 1);
+  return { rain, wind: (0.12 + gust) * smooth(6, 9, phase) * (calm ? 0.5 : 1) };
+}
+
+function spring(s, target, stiffness, damping, dt) {
+  for (let t = 0; t < dt; t += 1 / 240) {
+    const h = Math.min(1 / 240, dt - t);
+    s.v += (stiffness * (target - s.x) - damping * s.v) * h;
+    s.x += s.v * h;
+  }
+}
+
+function element(parent, className, styles = {}) {
+  const node = document.createElement('div');
+  node.className = className;
+  Object.assign(node.style, styles);
+  parent.append(node);
+  return node;
+}
+
+for (const [x, w] of [[-1.15, 0.5], [0.75, 0.36], [1.65, 0.4]]) {
+  element(far, 'puddle', { left: `${x - w / 2}em`, width: `${w}em` });
+}
+
+const NS = 'http://www.w3.org/2000/svg';
+const grass = [-1.9, -1.72, -1.5, 1.32, 1.5, 1.8, 2.05].map((x, i) => {
+  const blade = document.createElementNS(NS, 'svg');
+  blade.setAttribute('class', 'grass');
+  blade.setAttribute('viewBox', '0 0 40 100');
+  blade.style.cssText = `left: ${x - 0.05}em; width: 0.1em; height: ${0.18 + 0.08 * (i % 3)}em`;
+  blade.innerHTML = '<path d="M14 100 Q10 50 2 0 Q20 50 22 100 Z M20 100 Q26 40 38 10 Q30 50 28 100 Z"/>';
+  near.append(blade);
+  return blade;
+});
+
+// The mushroom's pose: the whole body leans from the foot, the cap trails the lean.
+const pose = { lean: { x: 0, v: 0 }, cap: { x: 0, v: 0 }, shake: -Infinity };
+
+const rotate = ([x, y], [cx, cy], degrees) => {
+  const a = degrees * Math.PI / 180, dx = x - cx, dy = y - cy;
+  return [cx + dx * Math.cos(a) - dy * Math.sin(a), cy + dx * Math.sin(a) + dy * Math.cos(a)];
+};
+const capTilt = () => (pose.cap.x - pose.lean.x) * 1.4 + shakeOffset();
+
+function toWorld(px, py) {
+  return rotate(rotate([px / PROFILE, py / PROFILE], HEAD_PIVOT, capTilt()), [0, 0], pose.lean.x);
+}
+
+function underCap([x, y]) {
+  const [lx, ly] = rotate(rotate([x, y], [0, 0], -pose.lean.x), HEAD_PIVOT, -capTilt()).map((v) => v * PROFILE);
+  return ly < -790 && ((lx - 32) / 560) ** 2 + ((ly + 820) / 310) ** 2 < 1;
+}
+
+// Rain slants with the wind, so the dry patch is the cap's rim projected along the rain.
+function dryPatch(wind) {
+  const ends = [toWorld(-527, -820), toWorld(591, -820)].map(([x, y]) => x - wind * y);
+  return [Math.min(...ends), Math.max(...ends)];
+}
+
+function shakeOffset() {
+  const s = (performance.now() - pose.shake) / 1000 - 0.3;
+  if (s < 0 || s > 1.4) return 0;
+  return (calm ? 2 : 9) * Math.exp(-2.6 * s) * Math.sin(s * Math.PI * 9);
+}
+
+// Shared splash rings and beads, reused round-robin.
+const splashes = Array.from({ length: 40 }, () => element(near, 'splash'));
+let nextSplash = 0;
+function splash(x, y, size) {
+  const ring = splashes[nextSplash++ % splashes.length];
+  ring.style.translate = `${x}em ${y}em`;
+  ring.animate([
+    { scale: 0.2 * size, opacity: 0.9 },
+    { scale: size, opacity: 0 },
+  ], { duration: 360, easing: 'cubic-bezier(0.2, 0.7, 0.4, 1)' });
+}
+
+// A bead of water thrown from a point, falling under a gentle, stylised gravity.
+const GRAVITY = 8;
+function fling(from, vx, vy) {
+  const bead = element(near, 'bead');
+  const landing = (-vy + Math.sqrt(vy * vy - 4 * GRAVITY / 2 * from[1])) / GRAVITY;
+  const frames = [];
+  for (let i = 0; i <= 8; i++) {
+    const t = i / 8 * landing;
+    frames.push({ translate: `${from[0] + vx * t}em ${from[1] + vy * t + GRAVITY / 2 * t * t}em` });
+  }
+  bead.animate(frames, { duration: landing * 1000 }).finished.then(() => {
+    bead.remove();
+    splash(from[0] + vx * landing, 0, 0.8);
+  });
+}
+
+// Raindrops: farther ones are slower, fainter, pass behind the mushroom and land a little higher.
+const drops = Array.from({ length: DROPS }, (_, i) => {
+  const depth = 0.55 + 0.45 * Math.random();
+  const isNear = depth > 0.8;
+  const el = element(isNear ? near : far, 'drop', { opacity: depth, scale: `1 ${depth}` });
+  return { el, depth, isNear, index: i, x: 0, y: 0, horizon: isNear ? 0 : -0.03 * (1 - depth) / 0.25 };
+});
+
+function respawn(drop, view, wind) {
+  drop.y = view.top - Math.random() * 0.4;
+  drop.x = (Math.random() * 2 - 1) * (view.half + 0.2) + wind * drop.y;
+}
+
+// Critters: each has a home out in the open and a place in the queue under the cap.
+const critters = [
+  { kind: 'mouse', home: -1.25, width: 0.27, speed: 0.8 },
+  { kind: 'ladybird', home: -0.8, width: 0.136, speed: 0.26 },
+  { kind: 'ladybird', home: 0.6, width: 0.136, speed: 0.24 },
+  { kind: 'snail', home: 1.1, width: 0.22, speed: 0.13 },
+].map((spec, i) => {
+  const el = document.getElementById(spec.kind).content.firstElementChild.cloneNode(true);
+  stage.append(el);
+  const svg = el.querySelector('svg');
+  return {
+    ...spec, el, svg, x: spec.home, v: 0, gait: i, wander: i * 2.1,
+    facing: { x: spec.home < 0 ? 1 : -1, v: 0 }, hop: -Infinity,
+    legs: [...el.querySelectorAll('.legs line')], tail: el.querySelector('.tail'), foot: el.querySelector('.foot'),
+  };
+});
+
+function shelterTargets(patch) {
+  const gap = 0.025;
+  const total = critters.reduce((sum, c) => sum + c.width + gap, -gap);
+  const centre = (patch[0] + patch[1]) / 2;
+  let x = Math.max(patch[0] + 0.03, Math.min(patch[1] - 0.03 - total, centre - total / 2));
+  return critters.map((c) => {
+    const target = x + c.width / 2;
+    x += c.width + gap;
+    return target;
+  });
+}
+
+function animateCritter(c, now, dt) {
+  const pace = Math.abs(c.v) / c.speed;
+  c.gait += Math.abs(c.v) * dt / (c.width * 0.18);
+  if (Math.abs(c.v) > 0.01) spring(c.facing, Math.sign(c.v), 400, 30, dt);
+  else spring(c.facing, Math.sign(c.facing.x) || 1, 400, 30, dt);
+  const hop = Math.max(0, Math.sin(Math.min(1, (now - c.hop) / 300) * Math.PI));
+  let bob = 0;
+  if (c.kind === 'ladybird') {
+    c.legs.forEach((leg, i) => { leg.style.rotate = `${Math.sin(c.gait + i * 2.1) * 30 * Math.min(pace, 1)}deg`; });
+  } else if (c.kind === 'mouse') {
+    bob = Math.abs(Math.sin(c.gait * 0.5)) * 0.028 * Math.min(pace, 1);
+    c.tail.style.rotate = `${Math.sin(now / 300) * 6}deg`;
+  } else {
+    c.foot.style.scale = `${1 + 0.07 * Math.sin(c.gait * 0.3) * Math.min(pace * 2, 1)} 1`;
+  }
+  c.el.style.translate = `${c.x}em ${-bob - hop * 0.06}em`;
+  c.svg.style.scale = `${c.facing.x} 1`;
+}
+
+let pointerWind = 0;
+let pointerTime = -Infinity;
+addEventListener('pointermove', (event) => {
+  pointerWind = (event.clientX / innerWidth - 0.5) * 1.2;
+  pointerTime = performance.now();
+});
+
+// The visible sky, in world units.
+function viewOf(unit) {
+  return { half: innerWidth / 2 / unit, top: -stage.offsetTop / unit };
+}
+
+// Scatter the first drops through the whole height so the shower does not arrive as one sheet.
+const firstView = viewOf(parseFloat(getComputedStyle(stage).fontSize));
+for (const drop of drops) {
+  respawn(drop, firstView, 0);
+  drop.y = firstView.top * Math.random();
+}
+
+let lastPhase = 0;
+let lastDrip = 0;
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 1 / 20);
+  last = now;
+  const unit = parseFloat(getComputedStyle(stage).fontSize);
+  const view = viewOf(unit);
+  const phase = (now / 1000) % CYCLE;
+  const sky = weather(phase);
+  const steer = Math.max(0, 1 - (now - pointerTime) / 3000);
+  const wind = sky.wind * (1 - steer) + pointerWind * steer;
+
+  // Lean into the wind, and lean towards anyone still caught out in the rain.
+  const patch = dryPatch(wind);
+  let reach = 0;
+  if (sky.rain > 0.2) {
+    for (const c of critters) {
+      if (c.x > patch[1]) reach += Math.min(1, (c.x - patch[1]) * 4);
+      if (c.x < patch[0]) reach -= Math.min(1, (patch[0] - c.x) * 4);
+    }
+  }
+  const tilt = Math.max(-13, Math.min(13, -wind * 26 + reach * 10));
+  spring(pose.lean, tilt, 16, 6, dt);
+  spring(pose.cap, pose.lean.x, 40, 4.5, dt);
+
+  if (lastPhase < SHAKE_AT && phase >= SHAKE_AT) {
+    pose.shake = now;
+    critters.forEach((c, i) => { c.hop = now + 350 + i * 90; });
+    setTimeout(() => {
+      for (let i = 0; i < (calm ? 3 : 10); i++) {
+        const side = i % 2 ? 1 : -1;
+        fling(toWorld(side > 0 ? 591 : -527, -830), side * (0.4 + Math.random() * 0.5), -0.6 - Math.random() * 0.6);
+      }
+    }, 380);
+  }
+  lastPhase = phase;
+  const s = (now - pose.shake) / 1000;
+  const squash = s < 0.3 ? 0.07 * Math.sin(s / 0.3 * Math.PI) : 0;
+  lean.style.rotate = `${pose.lean.x}deg`;
+  body.style.scale = `${1 + squash} ${1 - squash}`;
+  head.style.rotate = `${capTilt()}deg`;
+
+  grass.forEach((blade, i) => { blade.style.rotate = `${wind * 40 + 3 * Math.sin(now / 700 + i * 1.7)}deg`; });
+
+  // Shelter while it rains and stay put for the shake; wander near home when it is dry.
+  const sheltering = phase > 3.6 && phase < SHAKE_AT + 0.9;
+  const targets = sheltering ? shelterTargets(dryPatch(wind)) : critters.map((c) => c.home + 0.08 * Math.sin(now / 2000 + c.wander));
+  critters.forEach((c, i) => {
+    const desired = Math.max(-c.speed, Math.min(c.speed, (targets[i] - c.x) * 3));
+    c.v += (desired - c.v) * Math.min(1, dt * 6);
+    c.x += c.v * dt;
+    animateCritter(c, now, dt);
+  });
+
+  const slant = -Math.atan(wind) * 180 / Math.PI;
+  for (const drop of drops) {
+    drop.y += FALL * drop.depth * dt;
+    drop.x += wind * FALL * drop.depth * dt;
+    const active = drop.index < sky.rain * DROPS;
+    if (drop.isNear && underCap([drop.x, drop.y])) {
+      if (active) splash(drop.x, drop.y, 0.4);
+      respawn(drop, view, wind);
+    } else if (drop.y > drop.horizon) {
+      if (active && drop.isNear) splash(drop.x, 0, 1);
+      respawn(drop, view, wind);
+    }
+    drop.el.style.visibility = active ? 'visible' : 'hidden';
+    drop.el.style.translate = `${drop.x}em ${drop.y}em`;
+    drop.el.style.rotate = `${slant}deg`;
+  }
+
+  // Water gathers and runs off the low side of the cap.
+  if (sky.rain > 0.4 && now - lastDrip > (calm ? 900 : 380)) {
+    lastDrip = now;
+    const rim = pose.lean.x + capTilt() > 0 ? toWorld(591, -820) : toWorld(-527, -820);
+    fling(rim, wind * 0.3, 0);
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

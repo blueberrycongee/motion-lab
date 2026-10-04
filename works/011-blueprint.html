@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blueprint</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: radial-gradient(120% 100% at 45% 40%, #24548f, #1a3f70 70%, #132f56); }
+  svg { position: absolute; inset: 0; width: 100%; height: 100%; will-change: transform; }
+  /* The printed border of the sheet. */
+  body::after {
+    content: ''; position: absolute; inset: 3vmin; pointer-events: none;
+    border: max(1px, 0.18vmin) solid #dce8f566;
+    box-shadow: inset 0 0 0 0.6vmin #1a3f70, inset 0 0 0 0.75vmin #dce8f533;
+  }
+  .sheet { fill: none; stroke: #e6eff8; stroke-linecap: round; stroke-linejoin: round; }
+  .construction { stroke-width: 1.6; opacity: 0.32; }
+  .axis { stroke-width: 2; opacity: 0.6; stroke-dasharray: 60 14 6 14; }
+  .outline { stroke-width: 6; }
+  .detail { stroke-width: 3; }
+  .magnified .outline { stroke-width: 2; }
+  .magnified .detail { stroke-width: 1.1; }
+  .dimension { stroke-width: 2; opacity: 0.85; }
+  .arrow { fill: #e6eff8; stroke: none; transform-box: view-box; }
+  .hatch { stroke-width: 1.8; opacity: 0.7; stroke-linecap: butt; }
+  .ghost { stroke-width: 6; opacity: 0.05; }
+</style>
+</head>
+<body>
+<!-- The cyanotype: uneven exposure and the tooth of the paper. -->
+<svg viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid slice">
+  <filter id="paper" x="0" y="0" width="100%" height="100%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.003" numOctaves="3" seed="4" result="mottle"/>
+    <feColorMatrix in="mottle" values="0 0 0 0 0.05  0 0 0 0 0.12  0 0 0 0 0.25  0 0 0 -1.6 1.1"/>
+    <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="9" result="tooth"/>
+    <feColorMatrix in="tooth" values="0 0 0 0 0.85  0 0 0 0 0.9  0 0 0 0 1  0 0 0 0.18 -0.06" result="fibres"/>
+    <feMerge><feMergeNode/><feMergeNode in="fibres"/></feMerge>
+  </filter>
+  <rect width="1000" height="1000" filter="url(#paper)"/>
+</svg>
+
+<svg class="sheet" viewBox="-840 -1330 1680 1560">
+  <defs>
+    <path id="stem" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+    <path id="ring" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+    <path id="gills" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+    <path id="cap" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+    <clipPath id="clip-cap"><use href="#cap"/></clipPath>
+    <clipPath id="clip-stem"><use href="#stem"/></clipPath>
+    <clipPath id="clip-ring"><use href="#ring"/></clipPath>
+    <clipPath id="clip-section"><path class="section-half"/></clipPath>
+    <clipPath id="clip-magnified"><circle cx="-560" cy="-300" r="200"/></clipPath>
+  </defs>
+
+  <g class="ghost">
+    <use href="#stem"/><use href="#ring"/><use href="#gills"/><use href="#cap"/>
+  </g>
+
+  <g class="construction"></g>
+  <path class="axis"/>
+  <g class="profile"></g>
+  <g class="section" clip-path="url(#clip-section)">
+    <g class="hatch hatch-cap" clip-path="url(#clip-cap)"></g>
+    <g class="hatch hatch-stem" clip-path="url(#clip-stem)"></g>
+    <g class="hatch hatch-ring" clip-path="url(#clip-ring)"></g>
+  </g>
+  <g class="dimension"></g>
+  <g class="callout dimension"></g>
+  <g clip-path="url(#clip-magnified)">
+    <g class="magnified" transform="translate(-560 -300) scale(3) translate(470 850)"></g>
+  </g>
+</svg>
+
+<script type="module">
+const CYCLE = 19000;                 // ms for one drawing, from blank sheet to blank sheet
+const ERASE_AT = 15800;              // the eraser sweeps left to right from here
+const ERASE_FOR = 1800;
+const SVG = 'http://www.w3.org/2000/svg';
+const easeDraw = 'cubic-bezier(0.45, 0, 0.25, 1)';
+const easeInOut = 'cubic-bezier(0.65, 0, 0.35, 1)';
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const $ = (selector) => document.querySelector(selector);
+const lean = (y) => 0.05 * y * y / 1000;              // the stem's lean, in SVG units (y is negative up)
+
+function add(parent, tag, attributes) {
+  const element = document.createElementNS(SVG, tag);
+  for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+  parent.append(element);
+  return element;
+}
+
+const line = (parent, x1, y1, x2, y2) => add(parent, 'path', { d: `M${x1} ${y1} L${x2} ${y2}` });
+
+// The eraser reaches a mark when its sweep passes the mark's middle.
+function erasedAt(element) {
+  const box = element.getBBox();
+  const x = element.closest('.magnified') ? -560 : box.x + box.width / 2;
+  return ERASE_AT + ERASE_FOR * Math.min(Math.max((x + 840) / 1680, 0), 1);
+}
+
+function loop(element, keyframes) {
+  if (!calm) element.animate(keyframes, { duration: CYCLE, iterations: Infinity });
+}
+
+// Every stroke loops with the sheet: hidden, drawn in from its start, held, rubbed out.
+// Hidden is a little past 1 so a round cap does not leave a dot at the start.
+function draw(element, at, duration, easing = easeDraw) {
+  element.setAttribute('pathLength', 1);
+  element.style.strokeDasharray = '1 2';
+  const erased = erasedAt(element);
+  loop(element, [
+    { offset: 0, strokeDashoffset: 1.01, opacity: 1 },
+    { offset: at / CYCLE, strokeDashoffset: 1.01, easing },
+    { offset: (at + duration) / CYCLE, strokeDashoffset: 0 },
+    { offset: erased / CYCLE, strokeDashoffset: 0, opacity: 1 },
+    { offset: (erased + 350) / CYCLE, strokeDashoffset: 0, opacity: 0 },
+    { offset: 1, strokeDashoffset: 0, opacity: 0 },
+  ]);
+}
+
+// Arrowheads are set down rather than drawn.
+function stamp(element, at) {
+  const erased = erasedAt(element);
+  loop(element, [
+    { offset: 0, opacity: 0, scale: 0.4 },
+    { offset: at / CYCLE, opacity: 0, scale: 0.4, easing: 'cubic-bezier(0.2, 0.8, 0.3, 1)' },
+    { offset: (at + 220) / CYCLE, opacity: 0.85, scale: 1 },
+    { offset: erased / CYCLE, opacity: 0.85, scale: 1 },
+    { offset: (erased + 350) / CYCLE, opacity: 0, scale: 1 },
+    { offset: 1, opacity: 0, scale: 1 },
+  ]);
+}
+
+// 1. Construction lines: faint, long, ruled past the drawing the way a draughtsman lays them out.
+function construction(at) {
+  const group = $('.construction');
+  const guides = [
+    [-780, 0, 780, 0],
+    [-760, -1110, 760, -1110], [-760, -820, 760, -820], [-760, -860, 760, -860],
+    [-420, -655, 420, -655], [-420, -555, 420, -555],
+    [-175, 60, -175, -460], [175, 60, 175, -460], [-48, -400, -48, -900], [122, -400, 122, -900],
+  ];
+  guides.forEach(([x1, y1, x2, y2], i) => draw(line(group, x1, y1, x2, y2), at + i * 150, 900));
+  draw(add(group, 'ellipse', { cx: 32, cy: -800, rx: 560, ry: 310 }), at + 1300, 1300);
+  draw(line(group, -10, -800, 74, -800), at + 1700, 300);
+  draw(line(group, 32, -760, 32, -840), at + 1800, 300);
+
+  // The centre line is dash-dotted, so it grows instead of unrolling a dash.
+  const points = Array.from({ length: 14 }, (_, i) => 80 - i * 100).map((y) => `${lean(y).toFixed(1)} ${y}`);
+  const axis = $('.axis');
+  const [first, last] = [`path('M${points[0]} L${points[0]}')`, `path('M${points[0]} L${points.at(-1)}')`];
+  axis.setAttribute('d', `M${points.join(' L')}`);
+  const erased = ERASE_AT + ERASE_FOR / 2;
+  loop(axis, [
+    { offset: 0, d: first, opacity: 0.6 },
+    { offset: at / CYCLE, d: first, easing: easeInOut },
+    { offset: (at + 1400) / CYCLE, d: last },
+    { offset: erased / CYCLE, d: last, opacity: 0.6 },
+    { offset: (erased + 350) / CYCLE, d: last, opacity: 0 },
+    { offset: 1, d: last, opacity: 0 },
+  ]);
+}
+
+// 2. The profile in a heavy line, then the warts on the exterior half and the gill edges.
+// `pace` stretches the timing, so the magnified detail can be drawn quicker.
+function profile(parent, at, pace = 1) {
+  const outline = add(parent, 'g', { class: 'outline' });
+  [['stem', 0, 1300], ['ring', 900, 700], ['gills', 1300, 800], ['cap', 1700, 1500]].forEach(([id, delay, duration]) => {
+    draw(add(outline, 'path', { d: $(`#${id}`).getAttribute('d') }), at + delay * pace, duration * pace);
+  });
+
+  const detail = add(parent, 'g', { class: 'detail' });
+  const warts = [
+    [12, -1070, 30, 24], [-188, -1030, 28, 22], [-348, -960, 24, 19], [-88, -940, 22, 18],
+    [-438, -880, 18, 14], [-248, -890, 26, 21], [-28, -880, 16, 13],
+  ];
+  warts.forEach(([cx, cy, rx, ry], i) => {
+    draw(add(detail, 'ellipse', { cx, cy, rx, ry }), at + (3300 + i * 110) * pace, 380 * pace);
+  });
+
+  // Lamellae: short strokes across the gill band, angled toward the stem as the underside recedes.
+  for (let i = 0; i < 24; i++) {
+    const x = -500 + i * 22;
+    const top = -818 - 40 * (1 - ((x - 32) / 550) ** 2);
+    const bottom = -800 - 30 * (1 - ((x - 32) / 520) ** 2);
+    draw(line(detail, x, top, x + (32 - x) * 0.015, bottom), at + (3500 + i * 45) * pace, 160 * pace);
+  }
+}
+
+// 3. Dimensions: extension lines from the features, the dimension line from its middle out,
+// then the arrowheads. Each end is [feature point, point on the dimension line].
+function dimension(at, ...ends) {
+  const group = $('.dimension');
+  ends.forEach(([[fx, fy], [x, y]], i) => {
+    const length = Math.hypot(x - fx, y - fy);
+    const [ux, uy] = [(x - fx) / length, (y - fy) / length];
+    draw(line(group, fx + ux * 14, fy + uy * 14, x + ux * 30, y + uy * 30), at + i * 120, 450);
+  });
+  const [[, [ax, ay]], [, [bx, by]]] = ends;
+  const [mx, my] = [(ax + bx) / 2, (ay + by) / 2];
+  draw(line(group, mx, my, ax, ay), at + 450, 500);
+  draw(line(group, mx, my, bx, by), at + 450, 500);
+  // Arrowheads point outward from the middle, with their tips on the extension lines.
+  for (const [x, y, dx, dy] of [[ax, ay, ax - mx, ay - my], [bx, by, bx - mx, by - my]]) {
+    const length = Math.hypot(dx, dy);
+    const [ux, uy] = [dx / length, dy / length];
+    const arrow = add(group, 'path', {
+      class: 'arrow',
+      d: `M${x} ${y} l${-ux * 36 - uy * 9} ${-uy * 36 + ux * 9} l${uy * 18} ${-ux * 18} Z`,
+    });
+    arrow.style.transformOrigin = `${x}px ${y}px`;
+    stamp(arrow, at + 900);
+  }
+}
+
+// 4. Section hatching on the half right of the centre line, a different direction for each part.
+// Lines run at 45 degrees across the box [x0, y0, x1, y1]; the part's clip trims them.
+function hatch(group, at, [x0, y0, x1, y1], spacing, direction) {
+  const run = y1 - y0;
+  const count = Math.ceil((x1 - x0 + run) / spacing);
+  for (let i = 0; i < count; i++) {
+    const x = x0 - run + i * spacing;
+    const path = direction > 0 ? line(group, x, y1, x + run, y0) : line(group, x + run, y1, x, y0);
+    draw(path, at + i * 28, 240, 'cubic-bezier(0.3, 0, 0.6, 1)');
+  }
+}
+
+function sectionHalf() {
+  const axis = Array.from({ length: 13 }, (_, i) => -i * 100).map((y) => `${lean(y).toFixed(1)} ${y}`);
+  $('.section-half').setAttribute('d', `M${axis.join(' L')} L700 -1200 L700 0 Z`);
+}
+
+// 5. A detail callout: a bubble on the cap rim, a leader, and the rim redrawn three times larger.
+function callout(at) {
+  const group = $('.callout');
+  draw(add(group, 'circle', { cx: -470, cy: -850, r: 72 }), at, 500);
+  draw(line(group, -500, -786, -540, -506), at + 400, 400);
+  draw(add(group, 'circle', { cx: -560, cy: -300, r: 200 }), at + 700, 900);
+  profile($('.magnified'), at + 1100 - 1700 * 0.4, 0.4);
+}
+
+sectionHalf();
+construction(500);
+profile($('.profile'), 3000);
+dimension(7600, [[-527, -840], [-527, -1210]], [[591, -840], [591, -1210]]);
+dimension(8300, [[60, -1110], [740, -1110]], [[190, 0], [740, 0]]);
+dimension(8900, [[-175, 0], [-175, 110]], [[175, 0], [175, 110]]);
+dimension(9500, [[-540, -820], [-690, -820]], [[-10, -1110], [-690, -1110]]);
+hatch($('.hatch-cap'), 10100, [30, -1120, 600, -820], 26, 1);
+hatch($('.hatch-stem'), 11000, [0, -800, 180, -655], 26, 1);
+hatch($('.hatch-stem'), 11200, [0, -555, 180, 0], 26, 1);
+hatch($('.hatch-ring'), 11700, [0, -660, 150, -550], 16, -1);
+callout(12100);
+</script>
+</body>
+</html>

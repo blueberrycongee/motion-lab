@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boids</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #8f8d93; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const ctx = canvas.getContext('2d');
+
+// The profile signed distance from MUSHROOM.md, ported to JS: y up, ground at 0,
+// cap about 1.12 wide, top near 1.11. Returns [distance, part]:
+// negative inside; part 0 cap, 1 gills, 2 stem, 3 ring.
+function sdEllipse(x, y, rx, ry) {
+  const k0 = Math.hypot(x / rx, y / ry);
+  const k1 = Math.hypot(x / (rx * rx), y / (ry * ry));
+  return k0 * (k0 - 1) / k1;
+}
+
+function mushroom2D(x, y) {
+  x -= 0.05 * y * y;
+  const r = Math.abs(x);
+  const stemR = 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  let stem = Math.max(r - stemR, Math.abs(y - 0.43) - 0.43);
+  const ring = Math.max(r - 0.096 - (0.66 - y) * 0.32, Math.abs(y - 0.605) - 0.05);
+  const under = 0.82 + 0.02 * (1 - Math.min(r * r / 0.3125, 1));
+  const cap = Math.max(sdEllipse(x, y - 0.8, 0.56, 0.31), under - y);
+  const gills = Math.max(r - 0.55, Math.max(y - under, 0.8 + 0.015 * (1 - Math.min(r * r / 0.27, 1)) - y));
+  stem = Math.max(stem, -Math.min(cap, gills));
+  let res = [cap, 0];
+  if (gills < res[0]) res = [gills, 1];
+  if (stem < res[0]) res = [stem, 2];
+  if (ring < res[0]) res = [ring, 3];
+  return res;
+}
+
+// Warts from the canonical Path2D, as [x, y, radius] on the cap face.
+const WARTS = [
+  [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+  [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+  [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+  [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+].map(([x, y, r]) => [x + 0.032, y, r]);
+
+const BIRDS = 3500;
+
+// Places for every bird inside the silhouette. The warts are left open, a
+// little wider than drawn so they still read between birds, and the gills are
+// sparse so a pale seam parts the cap from the stem.
+function sampleTargets() {
+  const targets = [];
+  while (targets.length < BIRDS) {
+    const x = -0.62 + Math.random() * 1.3, y = Math.random() * 1.12;
+    const [d, part] = mushroom2D(x, y);
+    if (d > -0.004 || (part === 1 && Math.random() > 0.3)) continue;
+    if (WARTS.some(([wx, wy, r]) => Math.hypot(x - wx, (y - wy) / 0.8) < r + 0.008)) continue;
+    targets.push([x, y]);
+  }
+  return targets;
+}
+
+const targets = sampleTargets();
+const px = new Float32Array(BIRDS), py = new Float32Array(BIRDS);
+const vx = new Float32Array(BIRDS), vy = new Float32Array(BIRDS);
+const tx = new Float32Array(BIRDS), ty = new Float32Array(BIRDS);
+const flap = Float32Array.from({ length: BIRDS }, () => Math.random() * Math.PI * 2);
+const scale = Float32Array.from({ length: BIRDS }, () => 0.7 + Math.random() * 0.6);
+
+// Gives each bird a place in the shape close to where it already is: both
+// sets are cut into vertical slices by x, then paired by height within each.
+function assignTargets() {
+  const SLICES = 40;
+  const birds = [...Array(BIRDS).keys()].sort((a, b) => px[a] - px[b]);
+  const places = [...targets].sort((a, b) => a[0] - b[0]);
+  for (let s = 0; s < SLICES; s++) {
+    const from = Math.floor(s * BIRDS / SLICES), to = Math.floor((s + 1) * BIRDS / SLICES);
+    const sliceBirds = birds.slice(from, to).sort((a, b) => py[a] - py[b]);
+    const slicePlaces = places.slice(from, to).sort((a, b) => a[1] - b[1]);
+    sliceBirds.forEach((bird, k) => {
+      tx[bird] = slicePlaces[k][0];
+      ty[bird] = slicePlaces[k][1];
+    });
+  }
+}
+
+for (let i = 0; i < BIRDS; i++) {
+  [tx[i], ty[i]] = targets[i];
+  px[i] = tx[i];
+  py[i] = ty[i];
+}
+
+// Starlings track only their nearest few neighbours (Ballerini et al. 2008),
+// found here through a uniform grid rebuilt each step.
+const RADIUS = 0.035, SEPARATION = 0.012, NEIGHBOURS = 10;
+let grid = { cols: 0, rows: 0, x: 0, y: 0, start: new Int32Array(1), order: new Int32Array(BIRDS) };
+const cellIndex = new Int32Array(BIRDS);
+
+function buildGrid() {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let i = 0; i < BIRDS; i++) {
+    minX = Math.min(minX, px[i]); maxX = Math.max(maxX, px[i]);
+    minY = Math.min(minY, py[i]); maxY = Math.max(maxY, py[i]);
+  }
+  const cols = Math.floor((maxX - minX) / RADIUS) + 1, rows = Math.floor((maxY - minY) / RADIUS) + 1;
+  if (grid.start.length < cols * rows + 1) grid.start = new Int32Array(cols * rows + 1);
+  Object.assign(grid, { cols, rows, x: minX, y: minY });
+  const { start, order } = grid;
+  start.fill(0, 0, cols * rows + 1);
+  for (let i = 0; i < BIRDS; i++) {
+    cellIndex[i] = Math.floor((py[i] - minY) / RADIUS) * cols + Math.floor((px[i] - minX) / RADIUS);
+    start[cellIndex[i] + 1]++;
+  }
+  for (let c = 0; c < cols * rows; c++) start[c + 1] += start[c];
+  const fill = start.slice(0, cols * rows);
+  for (let i = 0; i < BIRDS; i++) order[fill[cellIndex[i]]++] = i;
+}
+
+// Sums over bird i's nearest-found neighbours, reused to avoid allocation.
+const near = { count: 0, vx: 0, vy: 0, x: 0, y: 0, awayX: 0, awayY: 0 };
+
+function survey(i) {
+  Object.assign(near, { count: 0, vx: 0, vy: 0, x: 0, y: 0, awayX: 0, awayY: 0 });
+  const { cols, rows, start, order } = grid;
+  const col = cellIndex[i] % cols, row = Math.floor(cellIndex[i] / cols);
+  for (let r = Math.max(row - 1, 0); r <= Math.min(row + 1, rows - 1); r++) {
+    for (let c = Math.max(col - 1, 0); c <= Math.min(col + 1, cols - 1); c++) {
+      for (let k = start[r * cols + c]; k < start[r * cols + c + 1]; k++) {
+        const j = order[k];
+        const dx = px[j] - px[i], dy = py[j] - py[i];
+        const d2 = dx * dx + dy * dy;
+        if (j === i || d2 > RADIUS * RADIUS) continue;
+        if (d2 < SEPARATION * SEPARATION) {
+          const d = Math.sqrt(d2) + 1e-6;
+          near.awayX -= dx / d * (1 - d / SEPARATION);
+          near.awayY -= dy / d * (1 - d / SEPARATION);
+        }
+        near.count++;
+        near.vx += vx[j];
+        near.vy += vy[j];
+        near.x += dx;
+        near.y += dy;
+        if (near.count === NEIGHBOURS) return;
+      }
+    }
+  }
+}
+
+// One cycle in seconds: the flock holds the mushroom, bursts out and roams
+// the sky, then streams back in and settles into it again.
+const CYCLE = 24;
+const RELEASE = 3.5, FREE = 5, RETURN = 15, FORMED = 21;
+const DT = 1 / 60;
+
+const smoothstep = (a, b, v) => {
+  const t = Math.min(Math.max((v - a) / (b - a), 0), 1);
+  return t * t * (3 - 2 * t);
+};
+
+const formation = (u) => (u < RETURN ? 1 - smoothstep(RELEASE, FREE, u) : smoothstep(RETURN, FORMED, u));
+
+// The flock roams after a point that wanders the sky and comes back to the
+// mushroom by the time the birds return.
+function roost(u, bounds) {
+  const away = smoothstep(RELEASE, FREE + 2, u) * (1 - smoothstep(RETURN - 3, RETURN + 1, u));
+  return [
+    away * bounds.halfWidth * 0.55 * Math.sin(u * 0.55),
+    0.6 + away * Math.sin(u * 0.9 + 1) * 0.25,
+  ];
+}
+
+function step(u, t, bounds) {
+  buildGrid();
+  const formed = formation(u);
+  const free = 1 - formed;
+  const [roostX, roostY] = roost(u, bounds);
+  const minSpeed = 0.3 * free, maxSpeed = 0.6 + 0.3 * formed;
+  for (let i = 0; i < BIRDS; i++) {
+    survey(i);
+    // Spacing pressure would blur the outline, so it eases off in formation.
+    const spacing = 2 + 7 * free;
+    let ax = near.awayX * spacing, ay = near.awayY * spacing;
+    if (near.count) {
+      ax += free * ((near.vx / near.count - vx[i]) * 2.5 + near.x / near.count * 4);
+      ay += free * ((near.vy / near.count - vy[i]) * 2.5 + near.y / near.count * 4);
+    }
+    ax += free * ((roostX - px[i]) * 0.9 + (Math.random() - 0.5) * 1.2);
+    ay += free * ((roostY - py[i]) * 0.9 + (Math.random() - 0.5) * 1.2);
+    // Turn back well before the edges of the sky.
+    ax += free * (Math.max(-bounds.halfWidth - px[i], 0) - Math.max(px[i] - bounds.halfWidth, 0)) * 12;
+    ay += free * (Math.max(bounds.low - py[i], 0) - Math.max(py[i] - bounds.high, 0)) * 12;
+
+    // In formation each bird flies to its place, which circles slightly so the
+    // flock keeps milling rather than freezing.
+    const placeX = tx[i] + 0.004 * Math.cos(t * 2 + flap[i]);
+    const placeY = ty[i] + 0.004 * Math.sin(t * 2 + flap[i]);
+    let wantX = (placeX - px[i]) * 3, wantY = (placeY - py[i]) * 3;
+    const want = Math.hypot(wantX, wantY);
+    if (want > maxSpeed) {
+      wantX *= maxSpeed / want;
+      wantY *= maxSpeed / want;
+    }
+    ax += formed * (wantX - vx[i]) * 8;
+    ay += formed * (wantY - vy[i]) * 8;
+
+    vx[i] += ax * DT;
+    vy[i] += ay * DT;
+    const speed = Math.hypot(vx[i], vy[i]) + 1e-6;
+    const clamped = Math.min(Math.max(speed, minSpeed), maxSpeed);
+    vx[i] *= clamped / speed;
+    vy[i] *= clamped / speed;
+  }
+  for (let i = 0; i < BIRDS; i++) {
+    px[i] += vx[i] * DT;
+    py[i] += vy[i] * DT;
+  }
+}
+
+let view, sky;
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width === w && canvas.height === h) return;
+  canvas.width = w;
+  canvas.height = h;
+  // Portrait screens are limited by the cap's width rather than the height.
+  const s = Math.min(w * 0.8, h * 0.6);
+  const ground = h / 2 + 0.52 * s;
+  view = {
+    s, x: w / 2, y: ground,
+    bounds: { halfWidth: w / 2 / s - 0.15, low: (ground - h * 0.8) / s, high: ground / s - 0.25 },
+  };
+  sky = renderSky(w, h);
+}
+
+// Dusk over a reed bed: blue-grey overhead warming to apricot at the horizon.
+function renderSky(w, h) {
+  const image = new OffscreenCanvas(w, h);
+  const c = image.getContext('2d');
+  const air = c.createLinearGradient(0, 0, 0, h);
+  air.addColorStop(0, '#4f5d6f');
+  air.addColorStop(0.5, '#8d8c90');
+  air.addColorStop(0.8, '#d3a17c');
+  air.addColorStop(0.92, '#e9b98a');
+  c.fillStyle = air;
+  c.fillRect(0, 0, w, h);
+
+  // Low cloud banks catch the last light along their undersides.
+  for (let i = 0; i < 7; i++) {
+    const y = h * (0.2 + Math.random() * 0.5), x = Math.random() * w;
+    const band = c.createRadialGradient(x, y, 0, x, y, w * 0.4);
+    band.addColorStop(0, `rgba(${y > h * 0.45 ? '205, 150, 120' : '70, 80, 96'}, 0.25)`);
+    band.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    c.save();
+    c.translate(x, y);
+    c.scale(1, 0.08);
+    c.translate(-x, -y);
+    c.fillStyle = band;
+    c.fillRect(0, y - w * 0.4, w, w * 0.8);
+    c.restore();
+  }
+
+  const m = Math.min(w, h);
+  const horizon = h * 0.9;
+  c.fillStyle = '#211f1e';
+  c.beginPath();
+  c.moveTo(0, h);
+  for (let x = 0; x <= w; x += Math.max(m * 0.004, 1)) {
+    // Reed heads, with a few dark tree crowns rising out of the bed.
+    const reeds = Math.random() * m * 0.012;
+    const trees = Math.max(Math.sin(x / w * 7 + 2), 0) ** 4 * m * 0.05;
+    c.lineTo(x, horizon - reeds - trees * (0.85 + 0.15 * Math.random()));
+  }
+  c.lineTo(w, h);
+  c.fill();
+  return image;
+}
+
+function draw(t) {
+  const { s, x, y } = view;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(sky, 0, 0);
+  ctx.setTransform(s, 0, 0, -s, x, y);
+  // Each bird is a short stroke across its heading; the wingbeat changes its
+  // length, which gives the flock its shimmer.
+  const path = new Path2D();
+  for (let i = 0; i < BIRDS; i++) {
+    const speed = Math.hypot(vx[i], vy[i]) + 1e-6;
+    const span = 0.0045 * scale[i] * (0.55 + 0.45 * Math.abs(Math.sin(t * 14 + flap[i])));
+    const sideX = -vy[i] / speed * span, sideY = vx[i] / speed * span;
+    path.moveTo(px[i] - sideX, py[i] - sideY);
+    path.lineTo(px[i] + sideX, py[i] + sideY);
+  }
+  ctx.lineWidth = Math.max(0.0032 * s, 1) / s;
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(28, 25, 28, 0.88)';
+  ctx.stroke(path);
+}
+
+const STEPS_PER_SECOND = 60;
+const MAX_STEPS_PER_FRAME = 2;
+let simTime = 0, pending = 0;
+let last = performance.now();
+
+function frame(ms) {
+  const dt = Math.min((ms - last) / 1000, 0.1);
+  last = ms;
+  resize();
+  pending = Math.min(pending + dt * STEPS_PER_SECOND, MAX_STEPS_PER_FRAME);
+  for (; pending >= 1; pending--) {
+    const before = simTime % CYCLE;
+    simTime += DT;
+    if (before < RETURN && simTime % CYCLE >= RETURN) assignTargets();
+    step(simTime % CYCLE, simTime, view.bounds);
+  }
+  draw(simTime);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

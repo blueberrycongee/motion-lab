@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clay</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #7d939a; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+
+const vertex = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const fragment = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform float uTime;
+out vec4 outColor;
+
+const vec3 LIGHT = vec3(-0.6, 0.85, 0.55);      // a hard key from the upper left
+const vec3 BOUNDS_CENTER = vec3(0.0, 0.45, 0.0);
+const float BOUNDS_RADIUS = 1.12;
+const float TABLE = -0.1;
+
+float frame;        // stop-motion frame index; each pose is held for two 24 fps frames
+vec3 boil;          // per-frame offset that reshuffles the hand-made surface
+float spin;
+
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float noise(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hash(i), hash(i + vec3(1, 0, 0)), f.x),
+                 mix(hash(i + vec3(0, 1, 0)), hash(i + vec3(1, 1, 0)), f.x), f.y),
+             mix(mix(hash(i + vec3(0, 0, 1)), hash(i + vec3(1, 0, 1)), f.x),
+                 mix(hash(i + vec3(0, 1, 1)), hash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
+
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom: ground at y = 0, cap top near y = 1.11, cap about 1.12 wide.
+// Returns distance and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom(vec3 p) {
+  p.x -= 0.05 * p.y * p.y;                       // a slight lean
+  float r = length(p.xz);
+
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43) * 0.8;
+
+  float frill = 0.008 * sin(atan(p.z, p.x) * 9.0);
+  float skirt = abs(r - (0.096 + (0.66 - p.y) * 0.32 + frill * smoothstep(0.64, 0.56, p.y))) - 0.009;
+  float ring = max(skirt, abs(p.y - 0.605) - 0.05) * 0.7;
+
+  vec3 c = p - vec3(0.0, 0.8, 0.0);
+  float dome = sdEllipsoid(c, vec3(0.56, 0.31, 0.56));
+  dome += 0.008 * sin(c.x * 11.0 + 1.3) * sin(c.z * 9.0) * sin(c.y * 7.0 + c.x * 5.0);
+  float under = 0.82 + 0.08 * (1.0 - min(r * r / 0.31, 1.0));
+  float cap = max(dome, under - p.y);
+  float gills = max(dome + 0.02, max(p.y - under - 0.004, under - 0.04 - p.y));
+
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  float body = smin(stem, max(cap, gills), 0.03);
+  if (body < res.x - 0.001) res = vec2(body, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+
+// Distance to the nearest wart centre on a jittered 3D grid, in grid cells.
+float wartDistance(vec3 p) {
+  vec3 g = p * 10.0;
+  vec3 i = floor(g), f = fract(g);
+  float d = 1e9;
+  for (int z = -1; z <= 1; z++)
+  for (int y = -1; y <= 1; y++)
+  for (int x = -1; x <= 1; x++) {
+    vec3 o = vec3(x, y, z);
+    vec3 j = o + vec3(hash(i + o), hash(i + o + 7.1), hash(i + o + 3.7));
+    d = min(d, length(j - f) * (0.7 + 0.6 * hash(i + o + 1.3)));
+  }
+  return d;
+}
+
+vec3 local(vec3 p) {
+  float c = cos(spin), s = sin(spin);
+  p.xz = mat2(c, -s, s, c) * p.xz;
+  return p;
+}
+
+// Upright coordinates centred on the cap, with the stem's lean removed.
+vec3 capSpace(vec3 q) {
+  return vec3(q.x - 0.05 * q.y * q.y, q.y - 0.8, q.z);
+}
+
+// A flattened lump of green plasticine the mushroom is pressed into.
+float grassBase(vec3 p) {
+  float edge = 0.78 + 0.08 * noise(vec3(p.xz * 3.0, 1.0));
+  vec2 w = vec2(length(p.xz) - edge, abs(p.y + 0.05) - 0.02);
+  return min(max(w.x, w.y), 0.0) + length(max(w, 0.0)) - 0.03;
+}
+
+// Returns distance and part: mushroom parts, 4 grass base. Warts are white clay balls
+// squashed onto the cap; everything gets hand-made lumps that shift from frame to frame.
+vec2 map(vec3 p) {
+  vec3 q = local(p);
+  vec2 m = mushroom(q);
+  if (m.y < 0.5 && m.x < 0.03) {
+    float d = wartDistance(capSpace(q));
+    m.x -= 0.02 * sqrt(max(1.0 - d * d / 0.058, 0.0)) * step(-0.02, capSpace(q).y);
+  }
+  float base = grassBase(q);
+  m.x = smin(m.x, base, 0.025);
+  if (base < m.x + 0.012) m.y = 4.0;
+  m.x += (noise(q * 5.0) - 0.5) * 0.022 + (noise(q * 14.0 + boil) - 0.5) * 0.006;
+  return m;
+}
+
+// Thumbprints left while sculpting: a shallow dent ringed with ridges. Each cell of a coarse
+// grid may hold one print; the grid jumps a little every frame, as handling moves them.
+float prints(vec3 p) {
+  vec3 g = p * 4.0 + boil * 0.004;
+  vec3 i = floor(g - 0.5);
+  float h = 0.0;
+  for (int z = 0; z <= 1; z++)
+  for (int y = 0; y <= 1; y++)
+  for (int x = 0; x <= 1; x++) {
+    vec3 c = i + vec3(x, y, z);
+    if (hash(c + 2.3) < 0.4) continue;
+    vec3 d = (g - c - vec3(hash(c), hash(c + 1.7), hash(c + 4.1))) / 4.0;
+    vec3 axis = normalize(vec3(hash(c + 5.1), hash(c + 6.2), hash(c + 7.3)) - 0.5);
+    float along = dot(d, axis);
+    float r = length(d + axis * along * 0.6);          // elliptical, like a real fingertip
+    float ridges = sin(r * 560.0 + along * 90.0 + 6.0 * hash(c + 8.4));
+    h += smoothstep(0.075, 0.04, r) * (ridges * 0.0005 - 0.003 * (1.0 - r / 0.075));
+  }
+  return h;
+}
+
+float surface(vec3 p) {
+  return map(p).x - prints(local(p));
+}
+
+vec3 normalAt(vec3 p) {
+  vec2 e = vec2(0.0008, 0.0);
+  return normalize(vec3(surface(p + e.xyy) - surface(p - e.xyy),
+                        surface(p + e.yxy) - surface(p - e.yxy),
+                        surface(p + e.yyx) - surface(p - e.yyx)));
+}
+
+vec2 march(vec3 ro, vec3 rd) {
+  vec3 oc = ro - BOUNDS_CENTER;
+  float b = dot(oc, rd);
+  float h = b * b - dot(oc, oc) + BOUNDS_RADIUS * BOUNDS_RADIUS;
+  if (h < 0.0) return vec2(-1.0);
+  float t = max(-b - sqrt(h), 0.0), tFar = -b + sqrt(h);
+  for (int i = 0; i < 96; i++) {
+    vec2 m = map(ro + rd * t);
+    if (m.x < 0.0005) return vec2(t, m.y);
+    t += m.x;
+    if (t > tFar) break;
+  }
+  return vec2(-1.0);
+}
+
+float shadow(vec3 p, vec3 l) {
+  float t = 0.04, light = 1.0;      // skip the lumps right at the start, which would self-shadow in blotches
+  for (int i = 0; i < 40; i++) {
+    float d = map(p + l * t).x;
+    light = min(light, 14.0 * d / t);
+    if (light < 0.01) break;
+    t += clamp(d, 0.01, 0.15);
+    if (t > 2.5) break;
+  }
+  return clamp(light, 0.0, 1.0);
+}
+
+float occlusion(vec3 p, vec3 n) {
+  float o = 0.0;
+  for (int i = 1; i <= 4; i++) {
+    float h = 0.035 * float(i);
+    o += (h - map(p + n * h).x) / float(i);
+  }
+  return clamp(1.0 - 2.5 * o, 0.0, 1.0);
+}
+
+vec3 clayColor(vec3 q, float part) {
+  if (part > 3.5) return vec3(0.08, 0.16, 0.035) * (0.85 + 0.3 * noise(q * 20.0));
+  if (part > 0.5) return part < 1.5 ? vec3(0.62, 0.48, 0.32) : vec3(0.8, 0.7, 0.52);
+  vec3 c = capSpace(q);
+  float dot = smoothstep(0.245, 0.235, wartDistance(c)) * step(-0.02, c.y);
+  return mix(vec3(0.6, 0.06, 0.03), vec3(0.85, 0.8, 0.7), dot);
+}
+
+vec3 shadeClay(vec3 p, vec3 rd, float part, float exposure) {
+  vec3 n = normalAt(p);
+  vec3 l = normalize(LIGHT);
+  vec3 base = clayColor(local(p), part);
+  float ao = occlusion(p, n);
+
+  // Plasticine lets a little light under its skin, so the terminator is softened.
+  float key = max(dot(n, l) + 0.15, 0.0) / 1.15 * shadow(p + n * 0.004, l);
+  float fill = max(dot(n, normalize(vec3(0.8, 0.3, 0.6))), 0.0);
+  vec3 col = base * (vec3(1.25, 1.1, 0.9) * key * exposure + vec3(0.18, 0.22, 0.27) * fill * ao
+                     + vec3(0.13, 0.16, 0.19) * (0.6 + 0.4 * n.y) * ao);
+  float sheen = pow(max(dot(n, normalize(l - rd)), 0.0), 18.0) * key;
+  float fresnel = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+  return col + vec3(1.0, 0.95, 0.85) * sheen * 0.2 + vec3(0.3, 0.35, 0.4) * fresnel * 0.15 * ao;
+}
+
+void main() {
+  frame = floor(uTime * 12.0);
+  boil = vec3(hash(vec3(frame, 1.0, 2.0)), hash(vec3(frame, 3.0, 5.0)), hash(vec3(frame, 7.0, 1.0))) * 40.0;
+  float t = frame / 12.0;
+  spin = 0.6 * sin(t * 0.45) + 0.1 * t;
+  float exposure = 1.0 + (hash(boil) - 0.5) * 0.04;    // the shutter never matches exactly
+
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / min(uResolution.x, uResolution.y);
+  vec3 ro = vec3(1.4, 1.15, 3.5);
+  vec3 target = vec3(0.0, 0.43, 0.0);
+  vec3 fw = normalize(target - ro);
+  vec3 rt = normalize(cross(fw, vec3(0, 1, 0)));
+  vec3 up = cross(rt, fw);
+  vec3 rd = normalize(uv.x * rt + uv.y * up + 2.0 * fw);
+  vec3 l = normalize(LIGHT);
+
+  // Painted card backdrop with a pool of key light, over a matte board table.
+  vec3 card = mix(vec3(0.2, 0.27, 0.3), vec3(0.32, 0.4, 0.43), smoothstep(-0.3, 0.4, uv.y));
+  vec3 col = card * (0.8 + 0.35 * exp(-3.0 * dot(uv - vec2(0.1, 0.1), uv - vec2(0.1, 0.1))));
+  if (rd.y < 0.0) {
+    vec3 p = ro + rd * ((TABLE - ro.y) / rd.y);
+    vec3 board = vec3(0.42, 0.37, 0.31) * (0.95 + 0.1 * noise(vec3(p.xz * vec2(2.0, 30.0), 0.0)));
+    vec3 lit = board * (vec3(0.25, 0.3, 0.34) + vec3(1.0, 0.9, 0.76) * l.y * shadow(p, l) * exposure);
+    col = mix(lit, col, smoothstep(2.0, 4.5, length(p.xz)));
+  }
+  vec2 hit = march(ro, rd);
+  if (hit.x > 0.0) col = shadeClay(ro + rd * hit.x, rd, hit.y, exposure);
+
+  col *= 1.0 - 0.3 * dot(uv, uv);
+  col = (col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14);   // ACES filmic curve
+  col = pow(col, vec3(1.0 / 2.2));
+  col += (hash(vec3(gl_FragCoord.xy, frame)) - 0.5) * 0.01;
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+gl.linkProgram(program);
+gl.useProgram(program);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const position = gl.getAttribLocation(program, 'position');
+gl.enableVertexAttribArray(position);
+gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+
+const uResolution = gl.getUniformLocation(program, 'uResolution');
+const uTime = gl.getUniformLocation(program, 'uTime');
+
+function frame(ms) {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    gl.viewport(0, 0, w, h);
+  }
+  gl.uniform2f(uResolution, w, h);
+  gl.uniform1f(uTime, ms / 1000);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>X-ray</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #dfe6ea; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+
+// The radiograph is soft by nature, so the absorption march runs at half resolution.
+const RENDER_SCALE = 0.5;
+
+const vertex = `#version 300 es
+layout(location = 0) in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const exposureFragment = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform float uTime;
+out vec4 outExposure;
+
+const vec3 BOUNDS_CENTER = vec3(0.0, 0.5, 0.0);
+const float BOUNDS_RADIUS = 0.9;
+const float STEP = 0.011;
+
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom: ground at y = 0, cap top near y = 1.11, cap about 1.12 wide.
+// Returns distance and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom(vec3 p) {
+  p.x -= 0.05 * p.y * p.y;                       // a slight lean
+  float r = length(p.xz);
+
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43) * 0.8;
+
+  float frill = 0.008 * sin(atan(p.z, p.x) * 9.0);
+  float skirt = abs(r - (0.096 + (0.66 - p.y) * 0.32 + frill * smoothstep(0.64, 0.56, p.y))) - 0.009;
+  float ring = max(skirt, abs(p.y - 0.605) - 0.05) * 0.7;
+
+  vec3 c = p - vec3(0.0, 0.8, 0.0);
+  float dome = sdEllipsoid(c, vec3(0.56, 0.31, 0.56));
+  dome += 0.008 * sin(c.x * 11.0 + 1.3) * sin(c.z * 9.0) * sin(c.y * 7.0 + c.x * 5.0);
+  float under = 0.82 + 0.08 * (1.0 - min(r * r / 0.31, 1.0));
+  float cap = max(dome, under - p.y);
+  float gills = max(dome + 0.02, max(p.y - under - 0.004, under - 0.04 - p.y));
+
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  float body = smin(stem, max(cap, gills), 0.03);
+  if (body < res.x - 0.001) res = vec2(body, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+
+// The torn cup of universal veil around the bulb, which the surface view hides.
+float volva(vec3 q) {
+  float a = atan(q.z, q.x);
+  float shell = abs(sdEllipsoid(q - vec3(0.0, 0.07, 0.0), vec3(0.195, 0.1, 0.195))) - 0.007;
+  float lip = q.y - 0.12 - 0.02 * sin(a * 5.0) * sin(a * 3.0 + 1.0);
+  return max(shell, lip);
+}
+
+// Full gills run from margin to stem; shorter lamellulae fill the outer gaps.
+float lamellae(float r, float a) {
+  float full = pow(0.5 + 0.5 * cos(a * 44.0), 10.0);
+  float lamellulae = pow(0.5 + 0.5 * cos(a * 44.0 + 3.14159), 10.0) * smoothstep(0.26, 0.34, r);
+  return full + lamellulae;
+}
+
+// Radiodensity: skins, lamellae and the fibrous stem wall absorb most; the
+// hollow core and the soft cap flesh let more through.
+float density(vec3 p, vec2 m, float veil) {
+  vec3 q = p;
+  q.x -= 0.05 * q.y * q.y;
+  float r = length(q.xz), a = atan(q.z, q.x);
+  float inside = smoothstep(0.004, -0.004, m.x);
+  float skin = exp(-abs(m.x) * 220.0);
+  float d;
+  if (m.y < 0.5) {
+    float marbling = 0.8 + 0.4 * sin(q.x * 23.0 + sin(q.z * 19.0) * 2.0) * sin(q.y * 31.0 + q.z * 7.0);
+    d = inside * 0.42 * marbling + skin * 1.3;
+  } else if (m.y < 1.5) {
+    d = inside * (0.05 + 1.6 * lamellae(r, a)) + skin * 0.35;
+  } else if (m.y < 2.5) {
+    float stemR = 0.085 + 0.025 * (1.0 - q.y / 0.86) + 0.065 * exp(-q.y * 9.0);
+    float wall = smoothstep(stemR * 0.5, stemR * 0.72, r);
+    float fibres = 0.7 + 0.3 * sin(a * 34.0 + sin(q.y * 11.0) * 1.2);
+    d = inside * (0.08 + 0.75 * wall * fibres) + skin * 0.9;
+  } else {
+    d = inside * 1.4 + skin * 0.8;
+  }
+  return d + smoothstep(0.004, -0.004, veil) * 1.1 + exp(-abs(veil) * 220.0) * 0.6;
+}
+
+vec3 rotateY(vec3 v, float a) {
+  float c = cos(a), s = sin(a);
+  return vec3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z);
+}
+
+void main() {
+  float scale = min(uResolution.x, uResolution.y);
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / scale;
+
+  // The specimen turns on its stage while the tube tilts between side and oblique views.
+  float spin = uTime * 0.26;
+  float elevation = mix(0.2, 0.6, 0.5 - 0.5 * cos(uTime * 0.09));
+  vec3 target = vec3(0.0, 0.5, 0.0);
+  vec3 eye = target + vec3(0.0, sin(elevation), cos(elevation)) * 3.6;
+  vec3 fw = normalize(target - eye);
+  vec3 rt = normalize(cross(fw, vec3(0, 1, 0)));
+  vec3 up = cross(rt, fw);
+  vec3 ro = rotateY(eye, spin);
+  vec3 rd = rotateY(normalize(uv.x * rt + uv.y * up + 1.85 * fw), spin);
+
+  float depth = 0.0;
+  vec3 oc = ro - BOUNDS_CENTER;
+  float b = dot(oc, rd);
+  float disc = b * b - dot(oc, oc) + BOUNDS_RADIUS * BOUNDS_RADIUS;
+  if (disc > 0.0) {
+    float t = max(-b - sqrt(disc), 0.0) + STEP * hash(vec3(gl_FragCoord.xy, 1.0));
+    float tEnd = -b + sqrt(disc);
+    for (int i = 0; i < 140; i++) {
+      vec3 p = ro + rd * t;
+      vec2 m = mushroom(p);
+      vec3 q = p;
+      q.x -= 0.05 * q.y * q.y;
+      float veil = volva(q);
+      float gap = min(m.x, veil);
+      // Leap through empty air; sample finely only within reach of matter.
+      if (gap > 0.03) {
+        t += gap - 0.02;
+      } else {
+        depth += density(p, m, veil) * STEP;
+        t += STEP;
+      }
+      if (t > tEnd) break;
+    }
+  }
+  outExposure = vec4(1.0 - exp(-depth * 3.2), 0.0, 0.0, 1.0);
+}`;
+
+const filmFragment = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform sampler2D uExposure;
+out vec4 outColor;
+
+const vec3 FILM_DARK = vec3(0.07, 0.1, 0.115);
+const vec3 FILM_CLEAR = vec3(0.8, 0.87, 0.9);
+const vec3 LIGHT_BOX = vec3(0.9, 0.94, 0.96);
+
+float hash(vec2 p) {
+  vec3 q = fract(vec3(p.xyx) * 0.1031);
+  q += dot(q, q.yzx + 33.33);
+  return fract((q.x + q.y) * q.z);
+}
+
+float roundedBox(vec2 p, vec2 halfSize, float radius) {
+  vec2 d = abs(p) - halfSize + radius;
+  return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
+}
+
+void main() {
+  float scale = min(uResolution.x, uResolution.y);
+  vec2 uv = gl_FragCoord.xy / uResolution;
+  vec2 p = (gl_FragCoord.xy - 0.5 * uResolution) / scale;
+
+  // Fluorescent tubes behind the diffuser leave soft vertical bands.
+  float tubes = 0.94 + 0.06 * cos(p.x * 10.0) - 0.08 * dot(p, p);
+  vec3 lightBox = LIGHT_BOX * tubes;
+
+  vec2 texel = 1.0 / vec2(textureSize(uExposure, 0));
+  float exposure = texture(uExposure, uv).r;
+  float blur = 0.0;
+  for (int i = 0; i < 4; i++) {
+    vec2 o = vec2(i == 0 ? 1.0 : i == 1 ? -1.0 : 0.0, i == 2 ? 1.0 : i == 3 ? -1.0 : 0.0);
+    blur += texture(uExposure, uv + o * texel * 2.5).r * 0.25;
+  }
+  // Unsharp masking, as a radiography processor applies, crisps the fine lamellae.
+  float density = clamp(exposure + (exposure - blur) * 0.9, 0.0, 1.0);
+  float grain = hash(floor(gl_FragCoord.xy)) - 0.5;
+  // The heel effect: the tube exposes one side of the sheet a little harder.
+  float heel = 1.0 + 0.12 * p.y;
+  vec3 film = mix(FILM_DARK * heel, FILM_CLEAR, pow(density, 0.85)) * (1.0 + grain * 0.06);
+  film *= tubes;
+
+  vec2 halfSize = 0.5 * uResolution / scale - 0.045;
+  float edge = roundedBox(p, halfSize, 0.012);
+  float aa = 1.5 / scale;
+  vec3 col = mix(film, lightBox, smoothstep(-aa, aa, edge));
+  // A thin highlight where the film's cut edge catches the light.
+  col += (1.0 - smoothstep(0.0, aa * 2.0, abs(edge + aa))) * 0.08;
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+function createProgram(fragmentSource) {
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+  return program;
+}
+
+const exposureProgram = createProgram(exposureFragment);
+const filmProgram = createProgram(filmFragment);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+const exposureUniforms = {
+  resolution: gl.getUniformLocation(exposureProgram, 'uResolution'),
+  time: gl.getUniformLocation(exposureProgram, 'uTime'),
+};
+const filmUniforms = {
+  resolution: gl.getUniformLocation(filmProgram, 'uResolution'),
+  exposure: gl.getUniformLocation(filmProgram, 'uExposure'),
+};
+
+function target(width, height) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const framebuffer = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+  return { framebuffer, texture, width, height };
+}
+
+let buffer = null;
+function frame(ms) {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  const sw = Math.round(w * RENDER_SCALE), sh = Math.round(h * RENDER_SCALE);
+  if (!buffer || buffer.width !== sw || buffer.height !== sh) {
+    if (buffer) {
+      gl.deleteFramebuffer(buffer.framebuffer);
+      gl.deleteTexture(buffer.texture);
+    }
+    buffer = target(sw, sh);
+  }
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, buffer.framebuffer);
+  gl.viewport(0, 0, sw, sh);
+  gl.useProgram(exposureProgram);
+  gl.uniform2f(exposureUniforms.resolution, sw, sh);
+  gl.uniform1f(exposureUniforms.time, ms / 1000);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, w, h);
+  gl.useProgram(filmProgram);
+  gl.uniform2f(filmUniforms.resolution, w, h);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, buffer.texture);
+  gl.uniform1i(filmUniforms.exposure, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flipbook</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background:
+      repeating-linear-gradient(0deg, rgb(255 255 255 / 0.035) 0 1px, transparent 1px 3px),
+      repeating-linear-gradient(90deg, rgb(60 40 20 / 0.05) 0 1px, transparent 1px 3px),
+      radial-gradient(100% 85% at 50% 35%, #cbb48c, #8a7150 85%);
+    perspective: calc(3.6 * var(--u));
+    perspective-origin: 50% 34%;
+  }
+  .world { position: absolute; left: 50%; top: 50%; transform-style: preserve-3d; }
+  .world div { position: absolute; left: 0; top: 0; transform-style: preserve-3d; }
+  .world svg { display: block; width: 100%; height: 100%; }
+
+  .page, .rest { width: calc(0.85 * var(--u)); height: var(--u); }
+  .strip { height: 100%; width: calc(0.085 * var(--u)); transform-origin: 0 50%; }
+  .world .face {
+    inset: 0;
+    backface-visibility: hidden;
+    transform-style: flat;
+    background: #f3ecdc;
+    overflow: hidden;
+  }
+  .face::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, var(--l0, transparent), var(--l1, transparent));
+  }
+  .world .back { transform: rotateY(180deg); }
+  .back svg, .left svg { opacity: 0.07; }
+  .strip > .face { right: -1px; }
+  .left svg { transform: scaleX(-1); }
+
+  .rest .face::after { background: linear-gradient(var(--gutter), rgb(60 40 20 / 0.22), transparent 14%); }
+  .rest.right { --gutter: 90deg; }
+  .rest.left { --gutter: 270deg; }
+  .world .cast { inset: 0; transform: translateZ(1px); filter: blur(calc(0.01 * var(--u))); opacity: 0.32; }
+
+  .edge {
+    background: repeating-linear-gradient(#efe7d5 0 calc(0.0042 * var(--u)), #c6b99e 0 calc(0.0055 * var(--u)));
+  }
+  .front-edge { width: calc(0.85 * var(--u)); transform-origin: 0 0; filter: brightness(0.86); }
+  .side-edge { height: var(--u); transform-origin: 0 0; }
+  .side-edge.right { filter: brightness(0.78); }
+
+  .board {
+    width: calc(0.89 * var(--u)); height: calc(1.05 * var(--u));
+    border-radius: calc(0.012 * var(--u));
+    background: linear-gradient(135deg, #3d6068, #2b464d);
+  }
+  .board::after {
+    content: '';
+    position: absolute;
+    inset: calc(0.02 * var(--u));
+    background: #d7c49c;
+  }
+  .board-edge { height: calc(0.02 * var(--u)); width: calc(0.89 * var(--u)); background: #24393f; transform-origin: 0 0; }
+  .spine { width: calc(0.06 * var(--u)); height: calc(1.05 * var(--u)); background: linear-gradient(90deg, #1f3237, #2e4a51 50%, #1f3237); }
+  .table-shadow {
+    width: calc(2 * var(--u)); height: calc(1.25 * var(--u));
+    border-radius: calc(0.06 * var(--u));
+    background: rgb(50 35 20 / 0.5);
+    filter: blur(calc(0.04 * var(--u)));
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position: absolute"><defs></defs></svg>
+<div class="world"></div>
+<script type="module">
+const PAGES = 32;
+const STRIPS = 10;
+const PAGE_W = 0.85, PAGE_H = 1, LEAF = 0.0055, BOARD = 0.02;
+const ART_W = 850, ART_H = 1000;
+const LIGHT = normalize([-0.35, -0.3, 0.89]);
+const CYCLE = 14;
+const FLIGHT = 0.8, RETURN = 0.65;
+const CAP_SPOTS = [
+  [12, -1070, 30, 24], [202, -1050, 26, 21], [-188, -1030, 28, 22], [362, -990, 30, 24],
+  [-348, -960, 24, 19], [92, -990, 34, 27], [-88, -940, 22, 18], [252, -930, 25, 20],
+  [472, -900, 20, 16], [-438, -880, 18, 14], [-248, -890, 26, 21], [132, -880, 20, 16],
+  [372, -875, 17, 14], [-28, -880, 16, 13],
+];
+// Growth keyframes: stem height, cap radii, how far the cap wraps under itself, ring and volva.
+const GROWTH = [
+  { p: 0, stem: 0, rx: 0.07, ry: 0.06, wrap: 1.2, ring: 0, volva: 0.1 },
+  { p: 0.15, stem: 0.02, rx: 0.16, ry: 0.15, wrap: 1.2, ring: 0, volva: 0.19 },
+  { p: 0.35, stem: 0.2, rx: 0.23, ry: 0.24, wrap: 1.1, ring: 0, volva: 0.21 },
+  { p: 0.55, stem: 0.5, rx: 0.31, ry: 0.28, wrap: 0.75, ring: 0.3, volva: 0.2 },
+  { p: 0.78, stem: 0.79, rx: 0.49, ry: 0.31, wrap: 0.25, ring: 1, volva: 0.18 },
+  { p: 1, stem: 0.86, rx: 0.56, ry: 0.31, wrap: 0.07, ring: 1, volva: 0.175 },
+];
+
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const world = document.querySelector('.world');
+const defs = document.querySelector('defs');
+const clamp = (x, lo, hi) => Math.min(Math.max(x, lo), hi);
+const clamp01 = (x) => clamp(x, 0, 1);
+const mix = (a, b, f) => a + (b - a) * f;
+const progress = (t, start, duration) => clamp01((t - start) / duration);
+const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - (2 - 2 * x) ** 3 / 2);
+const smooth = (x) => x * x * (3 - 2 * x);
+
+let seed = 11;
+function random() {
+  seed = (seed * 16807) % 2147483647;
+  return seed / 2147483647;
+}
+
+function normalize(v) {
+  const l = Math.hypot(...v);
+  return v.map((c) => c / l);
+}
+
+function make(className, parent, html = '') {
+  const node = document.createElement('div');
+  node.className = className;
+  node.innerHTML = html;
+  parent.append(node);
+  return node;
+}
+
+// ---- Drawings: one hand-inked frame per page, in page thousandths with y down ----
+
+function growth(p) {
+  const i = Math.max(GROWTH.findIndex((key) => key.p >= p), 1);
+  const a = GROWTH[i - 1], b = GROWTH[i];
+  const f = smooth((p - a.p) / (b.p - a.p));
+  const out = {};
+  for (const key in a) out[key] = mix(a[key], b[key], f);
+  return out;
+}
+
+function drawing(p) {
+  const g = growth(p);
+  const scale = 640, cx = 405, ground = 880;
+  const X = (x, y) => (cx + scale * (x + 0.05 * y * y)).toFixed(1);
+  const Y = (y) => (ground - scale * y).toFixed(1);
+  const point = (x, y) => `${X(x, y)} ${Y(y)}`;
+
+  const stemTop = g.stem;
+  const capY = stemTop - 0.04 + g.ry * Math.sin(g.wrap) * 0.9;
+  const rimY = capY - g.ry * Math.sin(g.wrap);
+  const rimX = g.rx * Math.cos(g.wrap);
+  const lean = 0.05 * capY * capY;
+
+  let stem = '';
+  if (stemTop > 0.01) {
+    const radius = (y) => 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-9 * y);
+    const ys = Array.from({ length: 13 }, (_, i) => (stemTop * i) / 12);
+    const right = ys.map((y) => point(radius(y), y));
+    const left = ys.reverse().map((y) => point(-radius(y), y));
+    stem = `<path d="M${right.join(' L')} L${left.join(' L')} Z" fill="#ece5d6"/>`;
+  }
+
+  const ringTop = 0.655 * stemTop / 0.86, ringBottom = 0.555 * stemTop / 0.86;
+  const ring = g.ring > 0.01
+    ? `<path d="M${point(0.096, ringTop)} L${point(0.13, ringBottom)} L${point(-0.11, ringBottom)} L${point(-0.077, ringTop)} Z" fill="#ddd5c2" opacity="${g.ring.toFixed(2)}"/>`
+    : '';
+
+  const v = g.volva;
+  const rim = [[-0.85, 0.95], [-0.5, 0.7], [-0.2, 1], [0.15, 0.72], [0.5, 1.02], [0.85, 0.8]];
+  const volva = `<path d="M${point(-v, 0)} Q${point(-v * 1.15, v * 0.5)} ${rim.map(([x, y]) => point(v * x, v * y)).join(' L')} Q${point(v * 1.15, v * 0.45)} ${point(v, 0)} Z" fill="#efe9dc"/>`;
+
+  const rx = g.rx * scale, ry = g.ry * scale;
+  const capCx = cx + scale * lean;
+  const right = `${(capCx + rimX * scale).toFixed(1)} ${Y(rimY)}`;
+  const left = `${(capCx - rimX * scale).toFixed(1)} ${Y(rimY)}`;
+  const under = `${capCx.toFixed(1)} ${Y(rimY + 0.04)}`;
+  const cap = `<path d="M${right} A${rx.toFixed(1)} ${ry.toFixed(1)} 0 1 0 ${left} Q${under} ${right} Z" fill="url(#cap-${Math.round(p * 1000)})"/>`;
+  const open = clamp01((0.8 - g.wrap) / 0.7);
+  const gills = open > 0
+    ? `<path d="M${left} Q${under} ${right} L${(capCx + rimX * scale * 0.94).toFixed(1)} ${Y(rimY - 0.025)} Q${capCx.toFixed(1)} ${Y(rimY + 0.012)} ${(capCx - rimX * scale * 0.94).toFixed(1)} ${Y(rimY - 0.025)} Z" fill="#d2c6ad" opacity="${open.toFixed(2)}"/>`
+    : '';
+  const gradient = `<radialGradient id="cap-${Math.round(p * 1000)}" cx="${capCx.toFixed(1)}" cy="${Y(capY + g.ry)}" r="${(g.rx * scale * 1.1).toFixed(1)}" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#6e130b"/><stop offset="1" stop-color="#b8321a"/></radialGradient>`;
+
+  // Warts start as large veil fragments and spread thinner as the cap expands.
+  const wart = mix(1.8, 1, clamp01((p - 0.3) / 0.6));
+  const spots = CAP_SPOTS.map(([sx, sy, srx, sry]) => {
+    const u = (sx - 32) / 560, w = (-sy - 820) / 310;
+    const angle = Math.atan2(w, u);
+    const reach = Math.min(1, w / Math.max(Math.sin(angle), 0.01));
+    const lift = mix(-Math.sin(g.wrap), 1, w) * 0.92;
+    return `<ellipse cx="${(capCx + u * rx * 0.95).toFixed(1)}" cy="${Y(capY + lift * g.ry * reach)}" rx="${((srx * wart * g.rx) / 0.56).toFixed(1)}" ry="${((sry * wart * g.rx) / 0.56).toFixed(1)}" fill="#efe7d6"/>`;
+  }).join('');
+
+  const shadow = `<ellipse cx="${cx + 20}" cy="${ground + 6}" rx="${(g.rx * scale * 0.85 + 40).toFixed(1)}" ry="${(20 + g.rx * 30).toFixed(1)}" fill="#8b7e64" opacity="0.28"/>`;
+  return { defs: gradient, body: shadow + stem + ring + volva + gills + cap + spots };
+}
+
+function scenery() {
+  let grass = '';
+  for (const [x, size] of [[90, 1], [150, 0.7], [640, 0.9], [700, 1.2], [760, 0.6]]) {
+    for (let i = 0; i < 4; i++) {
+      const base = x + i * 12 * size, tip = base + (random() - 0.4) * 50 * size;
+      grass += `<path d="M${base - 5} 880 Q${base} ${880 - 40 * size} ${tip} ${880 - (60 + random() * 40) * size} Q${base + 4} ${880 - 35 * size} ${base + 6} 880"/>`;
+    }
+  }
+  return `<path d="M30 882 Q220 870 420 884 T820 878" fill="none" stroke="#3b2f28" stroke-width="5" stroke-linecap="round"/>
+    <g fill="#7d9150" stroke="#3b2f28" stroke-width="3" stroke-linejoin="round">${grass}</g>
+    <ellipse cx="690" cy="900" rx="34" ry="14" fill="#a99d86" stroke="#3b2f28" stroke-width="4"/>`;
+}
+
+function buildFrames() {
+  const backdrop = scenery();
+  let html = '';
+  for (let k = 0; k < PAGES; k++) {
+    const art = drawing(k / (PAGES - 1));
+    // A little hand-drawn boil: each frame is traced slightly off its neighbour.
+    const dx = (random() - 0.5) * 6, dy = (random() - 0.5) * 4, turn = (random() - 0.5) * 0.8;
+    html += art.defs;
+    html += `<g id="frame-${k}" transform="translate(${dx.toFixed(2)} ${dy.toFixed(2)}) rotate(${turn.toFixed(2)} 425 880)">
+      ${backdrop}
+      <g stroke="#3b2f28" stroke-width="6" stroke-linejoin="round">${art.body}</g></g>`;
+  }
+  defs.innerHTML = html;
+}
+
+// ---- The book ----
+
+const artSvg = (viewBox) => `<svg viewBox="${viewBox}" preserveAspectRatio="none"><use/></svg>`;
+
+function edgeFace(className, parent) {
+  return make(`edge ${className}`, parent);
+}
+
+function buildBook() {
+  make('table-shadow', world).style.transform = 'translate3d(calc(-1 * var(--u)), calc(-0.6 * var(--u)), 0)';
+  for (const x of [-0.89, 0]) {
+    const board = make('board', world);
+    board.style.transform = `translate3d(calc(${x} * var(--u)), calc(-0.525 * var(--u)), calc(${BOARD} * var(--u)))`;
+    make('board-edge', world).style.transform =
+      `translate3d(calc(${x} * var(--u)), calc(0.525 * var(--u)), calc(${BOARD} * var(--u))) rotateX(-90deg)`;
+  }
+  make('spine', world).style.transform = `translate3d(calc(-0.03 * var(--u)), calc(-0.525 * var(--u)), calc(${BOARD} * var(--u) + 1px))`;
+
+  const stack = (side) => {
+    const rest = make(`rest ${side}`, world, `<div class="face">${artSvg(`0 0 ${ART_W} ${ART_H}`)}</div>`);
+    const cast = make('cast', rest, `<svg viewBox="0 0 ${ART_W} ${ART_H}" preserveAspectRatio="none"><path fill="#2c2117"/></svg>`);
+    return {
+      rest,
+      use: rest.querySelector('use'),
+      shadow: cast.querySelector('path'),
+      front: edgeFace('front-edge', world),
+      side: edgeFace(`side-edge ${side}`, world),
+      x0: side === 'right' ? 0 : -PAGE_W,
+      frame: -1,
+    };
+  };
+  return { right: stack('right'), left: stack('left') };
+}
+
+// A turning page is a chain of hinged strips, so it can curl.
+function buildPage() {
+  const root = make('page', world);
+  root.style.display = 'none';
+  const strips = [];
+  let parent = root;
+  for (let j = 0; j < STRIPS; j++) {
+    const strip = make('strip', parent);
+    const viewBox = `${(j * ART_W) / STRIPS} 0 ${ART_W / STRIPS} ${ART_H}`;
+    const front = make('face', strip, artSvg(viewBox));
+    const back = make('face back', strip, artSvg(viewBox));
+    strips.push({ strip, front, back, uses: [front.querySelector('use'), back.querySelector('use')] });
+    parent = strip;
+  }
+  return { root, strips, frame: -1 };
+}
+
+function setFrame(target, uses, frame) {
+  if (target.frame === frame) return;
+  target.frame = frame;
+  for (const use of uses) use.setAttribute('href', `#frame-${frame}`);
+}
+
+// ---- Choreography ----
+
+// Thumb release slows at both ends of the run, so the growth eases in and out.
+function releaseTime(i) {
+  const x = i / (PAGES - 2);
+  return 1.3 + 5.3 * (x + 0.09 * Math.sin(2 * Math.PI * x));
+}
+
+function returnTime(i) {
+  return 9.9 + 2.4 * ((PAGES - 2 - i) / (PAGES - 2));
+}
+
+// Base angle (0 resting right, π resting left) and how far the free edge leads or trails.
+function pageMotion(i, t) {
+  const forward = progress(t, releaseTime(i), FLIGHT);
+  const back = progress(t, returnTime(i), RETURN);
+  const curl = calm ? 0.35 : 0.95;
+  let angle = Math.PI * (ease(forward) - ease(back));
+  let bend = curl * Math.sin(Math.PI * forward) * (1 - 1.7 * forward)
+    - curl * Math.sin(Math.PI * back) * (1 - 1.7 * back);
+  if (calm) return { angle, bend };
+  if (i === 0) bend += 0.4 * ease(progress(t, 0.4, 0.8)) * (1 - ease(Math.min(1, forward * 3)));
+  const landed = t - releaseTime(i) - FLIGHT;
+  if (landed > 0 && back === 0 && landed < 0.7) bend -= 0.16 * Math.exp(-7 * landed) * Math.abs(Math.sin(11 * landed));
+  return { angle, bend };
+}
+
+function stripAngles({ angle, bend }) {
+  return Array.from({ length: STRIPS }, (_, j) => clamp(angle + bend * ((j + 0.5) / STRIPS) ** 1.6, 0, Math.PI));
+}
+
+function shade(angle, back) {
+  const normal = back ? [Math.sin(angle), 0, -Math.cos(angle)] : [-Math.sin(angle), 0, Math.cos(angle)];
+  const facing = normal[0] * LIGHT[0] + normal[2] * LIGHT[2];
+  if (facing > LIGHT[2]) return `rgb(255 250 238 / ${((facing - LIGHT[2]) * 2).toFixed(3)})`;
+  return `rgb(46 34 24 / ${clamp(0.62 * (1 - facing / LIGHT[2]), 0, 0.62).toFixed(3)})`;
+}
+
+// Shadow outline of a page on a stack top, with winding normalised so overlaps merge.
+function castOutline(joints, hinge, plane, x0) {
+  const project = ([x, z], y) => {
+    const drop = (hinge + z - plane) / LIGHT[2];
+    return [(x - LIGHT[0] * drop - x0) * ART_W / PAGE_W, (y - LIGHT[1] * drop + PAGE_H / 2) * ART_H];
+  };
+  const points = [...joints.map((p) => project(p, -PAGE_H / 2)), ...joints.slice().reverse().map((p) => project(p, PAGE_H / 2))];
+  let area = 0;
+  points.forEach(([x, y], k) => {
+    const [nx, ny] = points[(k + 1) % points.length];
+    area += x * ny - nx * y;
+  });
+  if (area < 0) points.reverse();
+  return `M${points.map(([x, y]) => `${x.toFixed(0)} ${y.toFixed(0)}`).join(' L')} Z`;
+}
+
+function poseStack(stack, count, frame, unit) {
+  const height = count * LEAF;
+  const z = BOARD + height;
+  stack.rest.style.display = count ? '' : 'none';
+  stack.rest.style.transform = `translate3d(${stack.x0 * unit}px, ${-PAGE_H / 2 * unit}px, ${z * unit}px)`;
+  if (count) setFrame(stack, [stack.use], frame);
+  stack.front.style.height = `${height * unit}px`;
+  stack.front.style.transform = `translate3d(${stack.x0 * unit}px, ${PAGE_H / 2 * unit}px, ${z * unit}px) rotateX(-90deg)`;
+  stack.side.style.width = `${height * unit}px`;
+  stack.side.style.transform = stack.x0 === 0
+    ? `translate3d(${PAGE_W * unit}px, ${-PAGE_H / 2 * unit}px, ${z * unit}px) rotateY(90deg)`
+    : `translate3d(${-PAGE_W * unit}px, ${-PAGE_H / 2 * unit}px, ${BOARD * unit}px) rotateY(-90deg)`;
+  return z;
+}
+
+function posePage(page, i, motion, unit) {
+  const angles = stripAngles(motion);
+  const from = BOARD + (PAGES - i) * LEAF, to = BOARD + (i + 1) * LEAF;
+  const hinge = mix(from, to, motion.angle / Math.PI);
+  page.root.style.display = '';
+  page.root.style.transform = `translate3d(0, ${-PAGE_H / 2 * unit}px, ${hinge * unit}px)`;
+  setFrame(page, page.strips.flatMap((s) => s.uses), i);
+  const width = (PAGE_W / STRIPS) * unit;
+  const joints = [[0, 0]];
+  page.strips.forEach((s, j) => {
+    const turn = angles[j] - (j ? angles[j - 1] : 0);
+    s.strip.style.transform = `${j ? `translateX(${width}px) ` : ''}rotateY(${-turn}rad)`;
+    const left = j ? (angles[j - 1] + angles[j]) / 2 : angles[j];
+    const right = j < STRIPS - 1 ? (angles[j] + angles[j + 1]) / 2 : angles[j];
+    s.front.style.setProperty('--l0', shade(left, false));
+    s.front.style.setProperty('--l1', shade(right, false));
+    s.back.style.setProperty('--l0', shade(right, true));
+    s.back.style.setProperty('--l1', shade(left, true));
+    const [x, z] = joints[j];
+    joints.push([x + (PAGE_W / STRIPS) * Math.cos(angles[j]), z + (PAGE_W / STRIPS) * Math.sin(angles[j])]);
+  });
+  return { joints, hinge };
+}
+
+// ---- Frame loop ----
+
+buildFrames();
+const book = buildBook();
+const pool = [];
+let unit = 1, focus = 0;
+
+function resize() {
+  const aspect = innerWidth / innerHeight;
+  const narrow = clamp01((1.3 - aspect) / 0.6);
+  unit = Math.min(innerHeight * 0.92, mix(innerWidth / 1.95, innerWidth / 1.02, narrow));
+  // Narrow screens frame the right-hand page, where the drawing is.
+  focus = mix(0.08, 0.44, narrow);
+  document.body.style.setProperty('--u', `${unit}px`);
+}
+addEventListener('resize', resize);
+resize();
+
+let lookX = 0, aimX = 0, lastInput = -1e9;
+addEventListener('pointermove', (event) => {
+  aimX = event.clientX / innerWidth - 0.5;
+  lastInput = performance.now();
+});
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.1);
+  last = now;
+  const t = ((now / 1000) * (calm ? 0.6 : 1)) % CYCLE;
+
+  let rightTop = PAGES - 1, leftTop = -1, flying = 0;
+  const airborne = [];
+  for (let i = 0; i < PAGES - 1; i++) {
+    const motion = pageMotion(i, t);
+    const moving = (motion.angle > 0 && motion.angle < Math.PI) || Math.abs(motion.bend) > 0.002;
+    if (moving) airborne.push([i, motion]);
+    else if (motion.angle === 0) rightTop = Math.min(rightTop, i);
+    else leftTop = Math.max(leftTop, i);
+  }
+  const rightZ = poseStack(book.right, PAGES - rightTop, rightTop, unit);
+  const leftZ = poseStack(book.left, leftTop + 1, leftTop, unit);
+
+  const rightShadow = [], leftShadow = [];
+  for (const [i, motion] of airborne) {
+    if (!pool[flying]) pool[flying] = buildPage();
+    const { joints, hinge } = posePage(pool[flying++], i, motion, unit);
+    rightShadow.push(castOutline(joints, hinge, rightZ, 0));
+    leftShadow.push(castOutline(joints, hinge, leftZ, -PAGE_W));
+  }
+  for (let k = flying; k < pool.length; k++) pool[k].root.style.display = 'none';
+  book.right.shadow.setAttribute('d', rightShadow.join(' '));
+  book.left.shadow.setAttribute('d', leftShadow.join(' '));
+
+  if (now - lastInput > 3000) aimX = 0;
+  lookX += (aimX - lookX) * Math.min(dt * 3, 1);
+  const drift = calm ? 0 : Math.sin((now / 1000) * 0.3);
+  const yaw = -0.1 + 0.05 * drift + lookX * 0.35;
+  const tilt = 0.52 + (calm ? 0 : 0.03 * Math.sin((now / 1000) * 0.23));
+  world.style.transform = `rotateX(${tilt}rad) rotateZ(${yaw}rad) translate3d(${-focus * unit}px, ${0.03 * unit}px, ${-0.12 * unit}px)`;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

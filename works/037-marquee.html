@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marquee</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1c1a16; }
+  body { --mushroom: min(74vh, 76vw); }
+  .layer { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: center; }
+  .band { flex: none; overflow: hidden; white-space: nowrap; height: calc(var(--size) * 0.84vmin); }
+  .track { display: inline-block; font-size: calc(var(--size) * 1vmin); line-height: 0.84; will-change: transform; }
+  .sans { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-weight: 800; letter-spacing: -0.02em; }
+  .serif { font-family: ui-serif, Georgia, 'Times New Roman', serif; font-style: italic; }
+  .mono { font-family: ui-monospace, Menlo, Consolas, 'Liberation Mono', monospace; font-weight: 700; }
+
+  /* The same bands, five times over. Each copy is masked to one part of the mushroom,
+     so a word changes colour exactly where it crosses an edge. */
+  .outside { color: #36332c; }
+  .outside .band:nth-child(3n) { color: #423e35; }
+  .crown { color: #8e1b0e; }
+  .rim { color: #d0421f; }
+  .cream { color: #ece5d4; }
+  .gills { color: #cbbd9f; }
+  /* A faint wash of the part's colour holds the outline between the letters. */
+  .layer:not(.outside) {
+    -webkit-text-stroke: 0.07em currentColor;
+    background: color-mix(in srgb, currentColor 16%, transparent);
+  }
+</style>
+</head>
+<body>
+<div class="layer outside"></div>
+<script type="module">
+const NAMES = [
+  'FLY AGARIC', 'AMANITA MUSCARIA', 'FLIEGENPILZ', 'TUE-MOUCHES', 'MUCHOMOR', 'MATAMOSCAS',
+  'KÄRPÄSSIENI', 'RØD FLUESOPP', 'VLIEGENZWAM', 'OVOLACCIO', 'MUKHOMOR', 'BENITENGUTAKE',
+];
+// Band heights in vmin and their speeds in vmin per second; the sign is the direction.
+const BANDS = [
+  [5, 9], [2.6, -16], [8, -6], [3.4, 12], [4.2, -10], [2.2, 20], [6, -8], [3, 14], [9, -5],
+  [2.8, 18], [5.5, 8], [3.6, -13], [7, -4], [2.4, 22], [4.4, -11], [8.5, 7], [3, -17], [6, 10],
+  [2.6, -15], [9, 5], [4, -12], [5.5, 10], [3.2, -16], [7.5, -7], [2.8, 19], [4.8, 9], [6.5, -6],
+  [3.4, 14], [8, 5], [2.4, -21], [5, -9],
+];
+const STYLES = ['sans', 'sans', 'serif', 'mono', 'sans', 'serif'];
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// The SVG profile from the mushroom specification, part by part.
+const STEM = 'M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z';
+const RING = 'M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z';
+const GILLS = 'M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z';
+const CAP = 'M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z';
+const SPOTS = [
+  [12, -1070, 30, 24], [202, -1050, 26, 21], [-188, -1030, 28, 22], [362, -990, 30, 24],
+  [-348, -960, 24, 19], [92, -990, 34, 27], [-88, -940, 22, 18], [252, -930, 25, 20],
+  [472, -900, 20, 16], [-438, -880, 18, 14], [-248, -890, 26, 21], [132, -880, 20, 16],
+  [372, -875, 17, 14], [-28, -880, 16, 13],
+].map(([cx, cy, rx, ry]) => `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"/>`).join('');
+
+function svgMask(body) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-620 -1160 1240 1200">${body}</svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+
+const cap = (fill) => `<mask id="m"><path d="${CAP}" fill="#fff"/><g fill="#000">${SPOTS}</g></mask>`
+  + `<defs><linearGradient id="g" x1="0" y1="-1110" x2="0" y2="-860" gradientUnits="userSpaceOnUse">`
+  + `<stop offset="0.15" stop-opacity="0"/><stop offset="0.9"/></linearGradient></defs>`
+  + `<path d="${CAP}" fill="${fill}" mask="url(#m)"/>`;
+const MASKS = {
+  outside: svgMask(`<path d="${STEM}"/><path d="${RING}"/><path d="${GILLS}"/><path d="${CAP}"/>`),
+  crown: svgMask(cap('#000')),
+  rim: svgMask(cap('url(#g)')),
+  gills: svgMask(`<path d="${GILLS}"/>`),
+  cream: svgMask(`<mask id="m"><rect x="-620" y="-1160" width="1240" height="1200" fill="#fff"/>`
+    + `<path d="${GILLS}"/><path d="${CAP}"/></mask><g mask="url(#m)"><path d="${STEM}"/><path d="${RING}"/></g>${SPOTS}`),
+};
+
+const base = document.querySelector('.outside');
+BANDS.forEach(([size], i) => {
+  const band = document.createElement('div');
+  band.className = `band ${STYLES[i % STYLES.length]}`;
+  band.style.setProperty('--size', size);
+  const names = Array.from({ length: 5 }, (_, k) => NAMES[(i * 5 + k * 7) % NAMES.length]);
+  band.innerHTML = `<div class="track"><span>${names.join(' · ')} · </span></div>`;
+  base.append(band);
+});
+for (const name of ['crown', 'rim', 'gills', 'cream']) {
+  const layer = base.cloneNode(true);
+  layer.className = `layer ${name}`;
+  layer.style.mask = `${MASKS[name]} center / auto var(--mushroom) no-repeat`;
+  document.body.append(layer);
+}
+base.style.mask = `linear-gradient(#000 0 0), ${MASKS.outside} center / auto var(--mushroom) no-repeat`;
+base.style.maskComposite = 'exclude';
+
+// Each band's copies across all layers move as one.
+const bands = BANDS.map(([size, speed], i) => ({
+  speed: calm ? speed * 0.25 : speed,
+  offset: Math.random() * 100,
+  tracks: [...document.querySelectorAll(`.band:nth-child(${i + 1}) .track`)],
+  lag: (i % 7) * 0.09 + Math.abs(i - BANDS.length / 2) * 0.03,
+}));
+
+// Repeat each phrase until a band is wider than the screen by one full phrase.
+let phraseWidths = [];
+function fill() {
+  phraseWidths = bands.map((band) => {
+    const phrase = band.tracks[0].firstElementChild;
+    const width = phrase.getBoundingClientRect().width;
+    const copies = Math.ceil(innerWidth / width) + 1;
+    for (const track of band.tracks) track.innerHTML = phrase.outerHTML.repeat(copies);
+    return width / Math.min(innerWidth, innerHeight) * 100;
+  });
+}
+addEventListener('resize', fill);
+fill();
+
+// Every nine seconds the bands brake almost to a stop, a few at a time, so the mushroom
+// sits still and sharp for a moment before the type pulls away again.
+const PERIOD = 9;
+function pace(t, lag) {
+  const phase = ((t - lag) % PERIOD + PERIOD) % PERIOD;
+  const brake = phase < 1.4 ? phase / 1.4 : phase < 3.6 ? 1 : phase < 5.2 ? 1 - (phase - 3.6) / 1.6 : 0;
+  const eased = brake * brake * (3 - 2 * brake);
+  return 1 - 0.9 * eased;
+}
+
+let last = performance.now();
+function frame(ms) {
+  const dt = Math.min((ms - last) / 1000, 0.1);
+  last = ms;
+  const vmin = Math.min(innerWidth, innerHeight) / 100;
+  bands.forEach((band, i) => {
+    band.offset += band.speed * (calm ? 1 : pace(ms / 1000, band.lag)) * dt;
+    const wrapped = ((band.offset % phraseWidths[i]) + phraseWidths[i]) % phraseWidths[i];
+    const transform = `translateX(${(-wrapped * vmin).toFixed(2)}px)`;
+    for (const track of band.tracks) track.style.transform = transform;
+  });
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

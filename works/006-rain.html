@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rain</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1d2321; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl2');
+
+const vertex = `#version 300 es
+in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const fragment = `#version 300 es
+precision highp float;
+uniform vec2 uResolution;
+uniform float uTime;
+out vec4 outColor;
+
+const float FOCAL = 1.5;
+const vec3 BOUND_CENTRE = vec3(0.03, 0.5, 0.0);
+const float BOUND_RADIUS = 0.82;
+const vec3 GAP = vec3(-0.8, 0.7, 0.05);     // where daylight breaks through the canopy
+
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(vec3(i, 0.0)), hash(vec3(i + vec2(1, 0), 0.0)), f.x),
+             mix(hash(vec3(i + vec2(0, 1), 0.0)), hash(vec3(i + vec2(1, 1), 0.0)), f.x), f.y);
+}
+
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// The mushroom: ground at y = 0, cap top near y = 1.11, cap about 1.12 wide.
+// Returns distance and part: 0 cap, 1 gills, 2 stem, 3 ring.
+vec2 mushroom(vec3 p) {
+  p.x -= 0.05 * p.y * p.y;                       // a slight lean
+  float r = length(p.xz);
+
+  float stemR = 0.085 + 0.025 * (1.0 - p.y / 0.86) + 0.065 * exp(-p.y * 9.0);
+  float stem = max(r - stemR, abs(p.y - 0.43) - 0.43) * 0.8;
+
+  float frill = 0.008 * sin(atan(p.z, p.x) * 9.0);
+  float skirt = abs(r - (0.096 + (0.66 - p.y) * 0.32 + frill * smoothstep(0.64, 0.56, p.y))) - 0.009;
+  float ring = max(skirt, abs(p.y - 0.605) - 0.05) * 0.7;
+
+  vec3 c = p - vec3(0.0, 0.8, 0.0);
+  float dome = sdEllipsoid(c, vec3(0.56, 0.31, 0.56));
+  dome += 0.008 * sin(c.x * 11.0 + 1.3) * sin(c.z * 9.0) * sin(c.y * 7.0 + c.x * 5.0);
+  float under = 0.82 + 0.08 * (1.0 - min(r * r / 0.31, 1.0));
+  float cap = max(dome, under - p.y);
+  float gills = max(dome + 0.02, max(p.y - under - 0.004, under - 0.04 - p.y));
+
+  vec2 res = vec2(cap, 0.0);
+  if (gills < res.x) res = vec2(gills, 1.0);
+  float body = smin(stem, max(cap, gills), 0.03);
+  if (body < res.x - 0.001) res = vec2(body, 2.0);
+  if (ring < res.x) res = vec2(ring, 3.0);
+  return res;
+}
+
+// Rain collects at the front of the rim, swells, lets go and falls into the puddle.
+// Returns the drop's centre and radius; landed is the time since it hit the water.
+vec4 drip(int i, out float landed) {
+  float angle = 0.8 + 0.5 * float(i);
+  float period = 2.1 + 0.9 * fract(float(i) * 0.618);
+  float t = mod(uTime + float(i) * 1.37, period);
+  float radius = 0.017 * smoothstep(0.0, 1.3, t);
+  vec3 rim = vec3(0.55 * cos(angle), 0.8, 0.55 * sin(angle));
+  rim.x += 0.05 * rim.y * rim.y;
+  float fall = max(t - 1.3, 0.0);
+  float drop = 3.0 * fall * fall;
+  float impact = sqrt(rim.y / 3.0);
+  landed = fall - impact;
+  vec3 centre = rim - vec3(0.0, radius + drop, 0.0);
+  return vec4(centre, landed > 0.0 ? 0.0 : radius);
+}
+
+vec2 map(vec3 p) {
+  vec2 m = mushroom(p);
+  for (int i = 0; i < 4; i++) {
+    float landed;
+    vec4 d = drip(i, landed);
+    if (d.w <= 0.0) continue;
+    float stretch = 1.0 + 1.2 * smoothstep(0.76, 0.5, d.y);   // elongates as it falls
+    float drop = sdEllipsoid(p - d.xyz, d.w * vec3(1.0, stretch, 1.0));
+    if (drop < m.x) m = vec2(drop, 5.0);
+  }
+  return m;
+}
+
+vec3 normalAt(vec3 p) {
+  vec2 e = vec2(0.0015, 0.0);
+  return normalize(vec3(map(p + e.xyy).x - map(p - e.xyy).x,
+                        map(p + e.yxy).x - map(p - e.yxy).x,
+                        map(p + e.yyx).x - map(p - e.yyx).x));
+}
+
+// Marches only inside the sphere that bounds the mushroom and its drops.
+vec2 march(vec3 ro, vec3 rd, float tMax) {
+  vec3 oc = ro - BOUND_CENTRE;
+  float b = dot(oc, rd);
+  float h = b * b - dot(oc, oc) + BOUND_RADIUS * BOUND_RADIUS;
+  if (h < 0.0) return vec2(-1.0);
+  h = sqrt(h);
+  float t = max(-b - h, 0.0), end = min(-b + h, tMax);
+  for (int i = 0; i < 90; i++) {
+    if (t > end) break;
+    vec2 m = map(ro + rd * t);
+    if (m.x < 0.0005 * t) return vec2(t, m.y);
+    t += m.x;
+  }
+  return vec2(-1.0);
+}
+
+float occlusion(vec3 p, vec3 n) {
+  float o = 0.0, w = 1.0;
+  for (int i = 1; i <= 4; i++) {
+    float h = 0.02 + 0.06 * float(i);
+    o += (h - map(p + n * h).x) * w;
+    w *= 0.7;
+  }
+  return clamp(1.0 - 2.2 * o, 0.0, 1.0);
+}
+
+// Mist between the trunks, brightest towards the canopy gap; overhead, pale sky through leaves.
+vec3 haze(vec3 rd) {
+  float toward = 0.5 + 0.5 * dot(normalize(rd.xz), normalize(GAP.xz));
+  vec3 col = mix(vec3(0.16, 0.2, 0.2), vec3(0.42, 0.44, 0.38), toward * toward);
+  if (rd.y > 0.0) {
+    vec2 leaves = rd.xz / (rd.y + 0.15) * 2.5;
+    float canopy = smoothstep(0.42, 0.62, noise(leaves) * 0.65 + noise(leaves * 3.1) * 0.35);
+    vec3 sky = mix(vec3(0.6, 0.64, 0.6), vec3(0.06, 0.08, 0.06), canopy);
+    col = mix(col, sky, smoothstep(0.1, 0.5, rd.y));
+  }
+  return col;
+}
+
+// Tree trunks as vertical cylinders, intersected analytically. Returns distance and bark shade.
+vec2 trunks(vec3 ro, vec3 rd) {
+  vec2 best = vec2(1e9, 0.0);
+  for (int i = 0; i < 9; i++) {
+    float fi = float(i);
+    vec2 centre = vec2((hash(vec3(fi, 1, 2)) - 0.5) * 9.0 - 0.5, -1.8 - fi * 1.3 - hash(vec3(fi, 3, 4)) * 1.2);
+    float radius = 0.16 + 0.22 * hash(vec3(fi, 5, 6));
+    vec2 oc = ro.xz - centre;
+    float a = dot(rd.xz, rd.xz), b = dot(oc, rd.xz), c = dot(oc, oc) - radius * radius;
+    float h = b * b - a * c;
+    if (h < 0.0) continue;
+    float t = (-b - sqrt(h)) / a;
+    if (t > 0.0 && t < best.x) {
+      vec2 n = (oc + rd.xz * t) / radius;
+      float furrows = 0.75 + 0.25 * sin(atan(n.y, n.x) * 14.0 + noise(vec2(fi * 7.0, (ro.y + rd.y * t) * 3.0)) * 3.0);
+      best = vec2(t, (0.35 + 0.65 * max(dot(n, normalize(GAP.xz)), 0.0)) * furrows);
+    }
+  }
+  return best;
+}
+
+vec3 background(vec3 ro, vec3 rd) {
+  vec3 col = haze(rd);
+  vec2 trunk = trunks(ro, rd);
+  if (trunk.x < 1e8 && ro.y + rd.y * trunk.x > 0.0) {
+    vec3 bark = vec3(0.045, 0.045, 0.04) + vec3(0.07, 0.075, 0.065) * trunk.y;
+    col = mix(bark, col, 1.0 - exp(-trunk.x * 0.11));
+  }
+  return col;
+}
+
+// A raindrop ring: a short wave train riding outward on the water.
+float ring(vec2 d, float age) {
+  if (age < 0.0 || age > 1.1) return 0.0;
+  float x = length(d) - 0.42 * age;
+  float splash = 3.0 * exp(-dot(d, d) * 9000.0) * smoothstep(0.08, 0.0, age);
+  return (sin(x * 95.0) * exp(-x * x * 500.0) + splash) * pow(1.0 - age / 1.1, 2.0) / (1.0 + 6.0 * age);
+}
+
+float waterHeight(vec2 p) {
+  float h = 0.0;
+  vec2 cell = floor(p / 0.32);
+  for (int y = -1; y <= 1; y++)
+  for (int x = -1; x <= 1; x++) {
+    vec2 id = cell + vec2(x, y);
+    float period = 0.9 + 0.6 * hash(vec3(id, 1.0));
+    float age = mod(uTime + period * hash(vec3(id, 2.0)), period);
+    vec2 centre = (id + 0.2 + 0.6 * vec2(hash(vec3(id, 3.0)), hash(vec3(id, 4.0)))) * 0.32;
+    h += ring(p - centre, age);
+  }
+  for (int i = 0; i < 4; i++) {
+    float landed;
+    vec4 d = drip(i, landed);
+    h += 1.6 * ring(p - d.xz, landed);
+  }
+  return h * 0.003;
+}
+
+float puddle(vec2 p) {
+  vec2 d = (p - vec2(0.25, 1.45)) / vec2(2.1, 1.3);
+  float edge = length(d) - 1.0 + 0.06 * sin(atan(d.y, d.x) * 5.0 + 1.0) + 0.04 * sin(atan(d.y, d.x) * 11.0);
+  return smoothstep(0.02, -0.02, edge);
+}
+
+// Water beads on the cap, in columns around it; some columns slowly run toward the rim.
+// Returns the bead's look: x dark meniscus, y highlight, z light focused through the drop; w coverage.
+vec4 beads(vec3 q) {
+  float angle = atan(q.z, q.x);
+  vec2 g = vec2(angle * 9.0, q.y * 28.0);
+  float column = floor(g.x);
+  float speed = step(0.55, hash(vec3(column, 7, 1))) * (0.4 + hash(vec3(column, 8, 2)));
+  g.y += uTime * speed;
+  vec2 id = floor(g), f = fract(g) - 0.5;
+  vec2 offset = vec2(hash(vec3(id, 1)), hash(vec3(id, 2))) - 0.5;
+  float radius = 0.12 + 0.2 * hash(vec3(id, 3));
+  vec2 v = (f - offset * 0.5) / radius;
+  float cover = smoothstep(1.0, 0.8, length(v)) * step(0.3, hash(vec3(id, 4)));
+  float meniscus = smoothstep(0.5, 1.0, length(v));
+  float highlight = smoothstep(0.3, 0.12, length(v - vec2(-0.3, 0.4)));
+  float focus = smoothstep(0.55, 0.0, length(v - vec2(0.15, -0.45)));
+  return vec4(meniscus, highlight, focus, cover);
+}
+
+float warts(vec3 p) {
+  vec3 g = p * 10.0;
+  vec3 i = floor(g), f = fract(g);
+  float d = 1e9;
+  for (int z = -1; z <= 1; z++)
+  for (int y = -1; y <= 1; y++)
+  for (int x = -1; x <= 1; x++) {
+    vec3 o = vec3(x, y, z);
+    vec3 j = o + vec3(hash(i + o), hash(i + o + 7.1), hash(i + o + 3.7));
+    d = min(d, length(j - f) * (0.7 + 0.6 * hash(i + o + 1.3)));
+  }
+  return 1.0 - smoothstep(0.18, 0.26, d);
+}
+
+vec3 shadeMushroom(vec3 p, vec3 rd, float part) {
+  vec3 n = normalAt(p);
+  vec3 q = p; q.x -= 0.05 * q.y * q.y;
+  float r = length(q.xz);
+  float ao = occlusion(p, n);
+  vec3 albedo;
+  float gloss = 0.5, beadGlint = 0.0;
+  if (part < 0.5) {
+    albedo = mix(vec3(0.3, 0.035, 0.02), vec3(0.58, 0.12, 0.04), smoothstep(0.2, 0.56, r));
+    albedo = mix(albedo, vec3(0.72, 0.68, 0.58), warts(q - vec3(0.0, 0.8, 0.0)) * smoothstep(0.0, 0.3, n.y + 0.2));
+    vec4 bead = beads(q);
+    albedo *= 1.0 - bead.w * (0.5 * bead.x - 0.6 * bead.z);
+    beadGlint = bead.w * bead.y;
+    gloss = 1.0;
+  } else if (part < 1.5) {
+    albedo = vec3(0.75, 0.69, 0.57) * (0.88 + 0.12 * cos(atan(q.z, q.x) * 70.0));
+    gloss = 0.15;
+  } else if (part < 3.5) {
+    albedo = mix(vec3(0.55, 0.52, 0.45), vec3(0.85, 0.82, 0.74), smoothstep(0.0, 0.3, q.y));
+  } else {
+    // A falling drop shows the forest behind it, bent and inverted.
+    float fresnel = 0.04 + 0.96 * pow(1.0 - max(dot(n, -rd), 0.0), 5.0);
+    vec3 through = haze(refract(rd, n, 0.75)) * 1.3;
+    return mix(through, haze(reflect(rd, n)), fresnel) + pow(max(dot(reflect(rd, n), normalize(GAP)), 0.0), 40.0);
+  }
+  vec3 gap = normalize(GAP);
+  float sky = 0.55 + 0.45 * n.y;
+  float key = max(dot(n, gap), 0.0);
+  vec3 col = albedo * (vec3(0.4, 0.46, 0.45) * sky * ao + vec3(0.75, 0.72, 0.6) * key * (0.4 + 0.6 * ao));
+  vec3 refl = reflect(rd, n);
+  float fresnel = 0.04 + 0.96 * pow(1.0 - max(dot(n, -rd), 0.0), 5.0);
+  col += haze(refl) * fresnel * gloss * ao;
+  col += vec3(0.9, 0.92, 0.85) * pow(max(dot(refl, gap), 0.0), 60.0) * gloss * 0.8;
+  return col + vec3(0.8, 0.82, 0.78) * beadGlint * ao;
+}
+
+// Wet leaf litter with a soft darkening where the cap keeps the sky off the ground.
+vec3 shadeGround(vec2 p) {
+  float litter = noise(p * 6.0) * 0.6 + noise(p * 19.0) * 0.4;
+  vec3 col = mix(vec3(0.05, 0.04, 0.03), vec3(0.13, 0.1, 0.06), litter);
+  col = mix(col, vec3(0.08, 0.1, 0.05), smoothstep(0.55, 0.8, noise(p * 3.0 + 9.0)));
+  float under = length(p - vec2(0.03, 0.0));
+  return col * (0.45 + 0.55 * smoothstep(0.1, 0.7, under));
+}
+
+// Long motion-blurred streaks in layers at increasing depth, hidden behind nearer surfaces.
+float rain(vec2 uv, float sceneDepth) {
+  float sum = 0.0;
+  for (int i = 0; i < 5; i++) {
+    float depth = 0.9 * pow(1.65, float(i));
+    if (depth > sceneDepth) break;
+    vec2 w = uv * depth / FOCAL * vec2(7.0, 1.4);
+    w.x += w.y * 0.6 + float(i) * 3.1;
+    w.y += uTime * 9.0 + float(i) * 0.37;
+    vec2 id = floor(w), f = fract(w);
+    if (hash(vec3(id, float(i))) < 0.45) continue;
+    float x = 0.15 + 0.7 * hash(vec3(id, 9.0 + float(i)));
+    float pixel = depth / FOCAL / min(uResolution.x, uResolution.y) * 7.0;
+    float width = max(0.025, pixel);
+    float streak = smoothstep(width, 0.0, abs(f.x - x)) * 0.025 / width;
+    streak *= smoothstep(0.0, 0.1, f.y) * smoothstep(0.55, 0.3, f.y);
+    sum += streak * (0.5 + 0.5 * hash(vec3(id, 5.0)));
+  }
+  return sum;
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / min(uResolution.x, uResolution.y);
+  vec3 ro = vec3(0.8, 0.85, 3.4);
+  vec3 target = vec3(0.0, 0.1, 0.0);
+  vec3 fw = normalize(target - ro);
+  vec3 rt = normalize(cross(fw, vec3(0, 1, 0)));
+  vec3 up = cross(rt, fw);
+  vec3 rd = normalize(uv.x * rt + uv.y * up + FOCAL * fw);
+
+  float tGround = rd.y < 0.0 ? -ro.y / rd.y : 1e9;
+  vec2 hit = march(ro, rd, tGround);
+  vec3 col;
+  float depth;
+  if (hit.x > 0.0) {
+    depth = hit.x;
+    col = shadeMushroom(ro + rd * hit.x, rd, hit.y);
+  } else if (tGround < 1e8 && tGround < trunks(ro, rd).x) {
+    depth = tGround;
+    vec3 p = ro + rd * tGround;
+    float water = puddle(p.xz);
+    vec3 ground = shadeGround(p.xz);
+    vec3 n = vec3(0, 1, 0);
+    if (water > 0.0) {
+      vec2 e = vec2(0.004, 0.0);
+      float h = waterHeight(p.xz);
+      n = normalize(vec3(h - waterHeight(p.xz + e.xy), e.x, h - waterHeight(p.xz + e.yx)));
+    }
+    vec3 refl = reflect(rd, n);
+    vec2 mirrored = march(p, refl, 1e9);
+    vec3 seen = mirrored.x > 0.0 ? shadeMushroom(p + refl * mirrored.x, refl, mirrored.y) : background(p, refl);
+    float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(n, -rd), 0.0), 5.0);
+    vec3 pool = mix(ground * 0.35, seen, max(fresnel, 0.45));
+    vec3 wet = ground + haze(refl) * fresnel * 0.4;
+    col = mix(wet, pool, water);
+    col = mix(col, haze(rd), 1.0 - exp(-tGround * 0.06));
+  } else {
+    depth = 1e9;
+    col = background(ro, rd);
+  }
+
+  col += vec3(0.5, 0.55, 0.55) * rain(uv, depth) * 0.22;
+  col *= 1.0 - 0.45 * dot(uv, uv);
+  col = pow(col, vec3(0.85));
+  col += (hash(vec3(gl_FragCoord.xy, uTime)) - 0.5) * 0.012;
+  outColor = vec4(col, 1.0);
+}`;
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+  return shader;
+}
+
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, vertex));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+gl.linkProgram(program);
+gl.useProgram(program);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const position = gl.getAttribLocation(program, 'position');
+gl.enableVertexAttribArray(position);
+gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+
+const uResolution = gl.getUniformLocation(program, 'uResolution');
+const uTime = gl.getUniformLocation(program, 'uTime');
+
+function frame(ms) {
+  // The puddle traces a second, reflected ray per pixel, so the internal resolution is capped lower.
+  const dpr = Math.min(devicePixelRatio, 1.5);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    gl.viewport(0, 0, w, h);
+  }
+  gl.uniform2f(uResolution, w, h);
+  gl.uniform1f(uTime, ms / 1000);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

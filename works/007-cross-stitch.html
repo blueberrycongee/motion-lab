@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cross-Stitch</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #9aa6a8; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas></canvas>
+<script type="module">
+const canvas = document.querySelector('canvas');
+const ctx = canvas.getContext('2d');
+
+// One aida square in mushroom units, and the hoop radius around the design centre.
+const CELL = 0.027;
+const HOOP = 0.82;
+const CENTER = { x: 0.03, y: 0.53 };
+
+// Stranded cotton, roughly matched to the DMC numbers a pattern would call for,
+// and the part of the mushroom each one belongs to (moss is not outlined).
+const FLOSS = [
+  ['#5e130c', 'cap'],   // 815 crown
+  ['#8a1e11', 'cap'],   // 498
+  ['#b3301a', 'cap'],   // 321 rim
+  ['#d0522c', 'cap'],   // 350 highlight
+  ['#f0e8d6', 'cap'],   // 712 warts
+  ['#cdbf9f', 'gills'], // 644
+  ['#ece6d6', 'stem'],  // 3865
+  ['#c2b391', 'stem'],  // 3782 shade
+  ['#ddd3bc', 'ring'],  // 822
+  ['#b1a07c', 'ring'],  // 3032 underside
+  ['#4d6136', null],    // 3362 moss
+  ['#7c8f4b', null],    // 3364 moss light
+];
+const BACKSTITCH = '#2f2119'; // 3371
+
+// Seconds per cross leg, pause to rethread between colours, and the cycle beats.
+const LEG = 0.018, RETHREAD = 0.7, BACK = 0.025, HOLD = 7, FADE = 2.5;
+
+// The mushroom in profile as Path2D, in mushroom units: y up, ground at 0,
+// cap about 1.12 wide, top near 1.11. Draw with ctx.setTransform(s, 0, 0, -s, x, groundY).
+function mushroomPaths() {
+  const lean = (y) => 0.05 * y * y;
+  const stemR = (y) => 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  const outline = (y0, y1, radius) => {
+    const path = new Path2D();
+    const n = 32;
+    for (let i = 0; i <= n; i++) {
+      const y = y0 + (y1 - y0) * (i / n);
+      path.lineTo(lean(y) + radius(y), y);
+    }
+    for (let i = n; i >= 0; i--) {
+      const y = y0 + (y1 - y0) * (i / n);
+      path.lineTo(lean(y) - radius(y), y);
+    }
+    path.closePath();
+    return path;
+  };
+  const stem = outline(0, 0.86, stemR);
+  const ring = outline(0.555, 0.655, (y) => 0.096 + (0.66 - y) * 0.32);
+
+  const cx = lean(0.8), a = Math.asin(0.02 / 0.31);
+  const cap = new Path2D();
+  cap.ellipse(cx, 0.8, 0.56, 0.31, 0, a, Math.PI - a);
+  cap.quadraticCurveTo(cx, 0.86, cx + 0.559, 0.82);
+  cap.closePath();
+
+  const gills = new Path2D();
+  gills.moveTo(cx - 0.55, 0.822);
+  gills.quadraticCurveTo(cx, 0.862, cx + 0.55, 0.822);
+  gills.lineTo(cx + 0.52, 0.8);
+  gills.quadraticCurveTo(cx, 0.83, cx - 0.52, 0.8);
+  gills.closePath();
+
+  // Warts on the visible face of the cap: [x, y, radius].
+  const spots = [
+    [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+    [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+    [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+    [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+  ].map(([x, y, r]) => {
+    const path = new Path2D();
+    path.ellipse(cx + x, y, r, r * 0.8, 0, 0, Math.PI * 2);
+    return path;
+  });
+  return { cap, gills, stem, ring, spots };
+}
+
+const hash = (x, y) => {
+  const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return h - Math.floor(h);
+};
+
+// Chart the mushroom onto the aida grid: one floss index per square, -1 for bare cloth.
+// Cell (i, j) spans [i, i + 1] × [j, j + 1] in CELL units.
+function chart() {
+  const paths = mushroomPaths();
+  const probe = new OffscreenCanvas(1, 1).getContext('2d');
+  const inside = (path, x, y) => probe.isPointInPath(path, x, y);
+  const i0 = -26, i1 = 28, j0 = -4, j1 = 43;
+  const cells = new Map();
+  for (let j = j0; j < j1; j++) {
+    for (let i = i0; i < i1; i++) {
+      const x = (i + 0.5) * CELL, y = (j + 0.5) * CELL;
+      let floss = -1;
+      if (inside(paths.cap, x, y)) {
+        const crown = Math.hypot((x - 0.032) / 0.56, (y - 1.11) / 0.31);
+        const edge = Math.hypot((x - 0.032) / 0.56, (y - 0.8) / 0.31);
+        const upperLeft = Math.atan2((y - 0.8) / 0.31, (x - 0.032) / 0.56);
+        floss = paths.spots.some((spot) => inside(spot, x, y)) ? 4
+          : edge > 0.7 && upperLeft > 1.9 && upperLeft < 2.7 ? 3 : crown < 0.5 ? 0 : crown < 0.86 ? 1 : 2;
+      } else if (inside(paths.gills, x, y)) floss = 5;
+      else if (inside(paths.ring, x, y)) floss = y < 0.585 ? 9 : 8;
+      else if (inside(paths.stem, x, y)) {
+        const across = (x - 0.05 * y * y) / (0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9));
+        floss = across > 0.3 || y > 0.79 ? 7 : 6;
+      } else if (y < 0.05) {
+        // A low cushion of moss, ragged along its top.
+        const height = 0.07 * (1 - ((x - 0.02) / 0.36) ** 2) + 0.025 * (hash(i, 1) - 0.5);
+        if (y < height && y > -0.1) floss = hash(i, j) < (y < 0 ? 0.65 : 0.35) ? 10 : 11;
+      }
+      if (floss >= 0) cells.set(`${i},${j}`, floss);
+    }
+  }
+  return cells;
+}
+
+// Work each colour the way a stitcher does: one connected area at a time, row by row
+// from the top, laying the half stitches left to right and crossing them on the way back.
+function stitchOrder(cells) {
+  const legs = [];
+  let time = 0;
+  for (let floss = 0; floss < FLOSS.length; floss++) {
+    const left = new Set([...cells].filter(([, f]) => f === floss).map(([key]) => key));
+    while (left.size) {
+      const [first] = [...left].map((key) => key.split(',').map(Number))
+        .sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+      const area = [], queue = [first];
+      left.delete(`${first[0]},${first[1]}`);
+      while (queue.length) {
+        const [i, j] = queue.pop();
+        area.push([i, j]);
+        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const key = `${i + di},${j + dj}`;
+          if (left.delete(key)) queue.push([i + di, j + dj]);
+        }
+      }
+      const rows = new Map();
+      for (const [i, j] of area) rows.set(j, [...(rows.get(j) || []), i]);
+      for (const j of [...rows.keys()].sort((a, b) => b - a)) {
+        const row = rows.get(j).sort((a, b) => a - b);
+        for (const i of row) legs.push({ i, j, floss, top: false, time: (time += LEG) });
+        for (const i of row.reverse()) legs.push({ i, j, floss, top: true, time: (time += LEG) });
+      }
+    }
+    time += RETHREAD;
+  }
+  return { legs, end: time };
+}
+
+// Backstitch along the square edges wherever two parts meet, chained into continuous runs.
+function backstitchOrder(cells, start) {
+  const part = (i, j) => {
+    const f = cells.get(`${i},${j}`);
+    return f === undefined ? null : FLOSS[f][1];
+  };
+  // Edges between two mushroom parts are visited from both sides; keep one of them.
+  const edges = [];
+  for (const key of cells.keys()) {
+    const [i, j] = key.split(',').map(Number);
+    const p = part(i, j);
+    if (!p) continue;
+    const sides = [[-1, 0, [i, j, i, j + 1]], [0, -1, [i, j, i + 1, j]],
+      [1, 0, [i + 1, j, i + 1, j + 1]], [0, 1, [i, j + 1, i + 1, j + 1]]];
+    for (const [di, dj, edge] of sides) {
+      const q = part(i + di, j + dj);
+      if (q !== p && (!q || di + dj < 0)) edges.push(edge);
+    }
+  }
+  const unused = new Set(edges.map((_, k) => k));
+  const at = new Map();
+  edges.forEach(([a, b, c, d], k) => {
+    for (const end of [`${a},${b}`, `${c},${d}`]) at.set(end, [...(at.get(end) || []), k]);
+  });
+  const runs = [];
+  let time = start;
+  while (unused.size) {
+    let [k] = unused;
+    let [x, y] = edges[k];
+    while (k !== undefined) {
+      unused.delete(k);
+      const [a, b, c, d] = edges[k];
+      const [nx, ny] = a === x && b === y ? [c, d] : [a, b];
+      runs.push({ x0: x, y0: y, x1: nx, y1: ny, time: (time += BACK) });
+      [x, y] = [nx, ny];
+      k = (at.get(`${x},${y}`) || []).find((e) => unused.has(e));
+    }
+  }
+  return { runs, end: time };
+}
+
+const cells = chart();
+const { legs, end: crossesDone } = stitchOrder(cells);
+const { runs, end: backDone } = backstitchOrder(cells, crossesDone + RETHREAD);
+const CYCLE = backDone + HOLD + FADE;
+
+const shade = (hex, k) => {
+  const n = parseInt(hex.slice(1), 16);
+  const c = [n >> 16, (n >> 8) & 255, n & 255].map((v) => Math.min(255, Math.round(v * k)));
+  return `rgb(${c})`;
+};
+
+// One cross leg of two-strand floss, lying from hole to hole across a square.
+// Each strand is a rounded tube with a satin highlight and the fine slant of its twist.
+function legSprite(hex, top, cell) {
+  const size = Math.ceil(cell * 1.6);
+  const image = new OffscreenCanvas(size, size);
+  const c = image.getContext('2d');
+  c.translate(size / 2, size / 2);
+  c.rotate(top ? Math.PI / 4 : -Math.PI / 4);
+  const half = cell * Math.SQRT2 * 0.49, width = cell * 0.25;
+  const sheen = top ? 1 : 0.9;
+  c.lineCap = 'round';
+  c.lineWidth = width;
+  c.shadowColor = 'rgba(20, 28, 32, 0.5)';
+  c.shadowBlur = cell * 0.12;
+  c.shadowOffsetX = cell * 0.04;
+  c.shadowOffsetY = cell * 0.07;
+  for (const offset of [-0.5, 0.5]) {
+    c.strokeStyle = shade(hex, 0.7);
+    c.beginPath();
+    c.moveTo(-half, offset * width);
+    c.lineTo(half, offset * width);
+    c.stroke();
+  }
+  c.shadowColor = 'transparent';
+  for (const offset of [-0.5, 0.5]) {
+    const y = offset * width;
+    const satin = c.createLinearGradient(0, y - width / 2, 0, y + width / 2);
+    satin.addColorStop(0, shade(hex, 0.62 * sheen));
+    satin.addColorStop(0.38, shade(hex, 1.08 * sheen));
+    satin.addColorStop(0.5, shade(hex, 1.22 * sheen));
+    satin.addColorStop(1, shade(hex, 0.68 * sheen));
+    c.strokeStyle = satin;
+    c.lineWidth = width * 0.92;
+    c.beginPath();
+    c.moveTo(-half, y);
+    c.lineTo(half, y);
+    c.stroke();
+    c.lineWidth = Math.max(cell * 0.022, 0.6);
+    c.strokeStyle = 'rgba(30, 20, 15, 0.12)';
+    for (let x = -half; x < half; x += cell * 0.09) {
+      c.beginPath();
+      c.moveTo(x, y - width * 0.42);
+      c.lineTo(x + width * 0.5, y + width * 0.42);
+      c.stroke();
+    }
+  }
+  // The thread dives into the holes, so its ends fall into shadow.
+  c.globalCompositeOperation = 'source-atop';
+  const ends = c.createLinearGradient(-half - width / 2, 0, half + width / 2, 0);
+  ends.addColorStop(0, 'rgba(20, 15, 15, 0.55)');
+  ends.addColorStop(0.12, 'rgba(20, 15, 15, 0)');
+  ends.addColorStop(0.88, 'rgba(20, 15, 15, 0)');
+  ends.addColorStop(1, 'rgba(20, 15, 15, 0.55)');
+  c.fillStyle = ends;
+  c.fillRect(-size, -size, size * 2, size * 2);
+  return image;
+}
+
+// Aida: blocks of interlaced threads with an open hole at every corner, taut inside
+// the hoop and slack and shadowed outside it. Rendered per pixel once per resize.
+function renderCloth(view) {
+  const { w, h, s, ox, oy, cell } = view;
+  const image = new ImageData(w, h);
+  const data = image.data;
+  const hoopX = ox + CENTER.x * s, hoopY = oy - CENTER.y * s, hoopR = HOOP * s;
+  const weave = Math.min(Math.max((cell - 7) / 12, 0), 1);
+  const blur = 1.2 / cell;
+  const smooth = (a, b, v) => {
+    const t = Math.min(Math.max((v - a) / (b - a), 0), 1);
+    return t * t * (3 - 2 * t);
+  };
+  for (let py = 0; py < h; py++) {
+    const gy = (oy - py) / cell;
+    const cy = Math.floor(gy), v = gy - cy, ey = Math.min(v, 1 - v);
+    const threadY = Math.sin(Math.PI * ((v * 4) % 1));
+    for (let px = 0; px < w; px++) {
+      const gx = (px - ox) / cell;
+      const cx = Math.floor(gx), u = gx - cx, ex = Math.min(u, 1 - u);
+      const threadX = Math.sin(Math.PI * ((u * 4) % 1));
+      const over = ((Math.floor(u * 4) + Math.floor(v * 4)) & 1) ? threadY : threadX;
+      const r = Math.hypot(px - hoopX, py - hoopY) / hoopR;
+      const taut = r < 1 ? 1 : 0.45;
+      let k = 0.95 + 0.04 * hash(cx, cy) + weave * taut * (0.1 * over - 0.05);
+      k *= 1 - 0.12 * taut * (1 - smooth(0, 0.08 + blur, Math.min(ex, ey)));
+      const hole = taut * 0.8 * (1 - smooth(0.085, 0.085 + blur, Math.hypot(ex, ey)));
+      // Outside the hoop the cloth sags into soft folds.
+      k *= r < 1 ? 1 - 0.06 * r ** 8 : 0.8 + 0.05 * Math.sin(px / s * 9 + Math.sin(py / s * 4) * 2);
+      const i = (py * w + px) * 4;
+      data[i] = (198 * k) * (1 - hole) + 52 * hole;
+      data[i + 1] = (207 * k) * (1 - hole) + 60 * hole;
+      data[i + 2] = (207 * k) * (1 - hole) + 64 * hole;
+      data[i + 3] = 255;
+    }
+  }
+  const cloth = new OffscreenCanvas(w, h);
+  const c = cloth.getContext('2d');
+  c.putImageData(image, 0, 0);
+  drawHoop(c, hoopX, hoopY, hoopR, s);
+  return cloth;
+}
+
+// A beech hoop: the outer ring clamps the cloth, with its brass screw at the top.
+function drawHoop(c, x, y, radius, s) {
+  const band = 0.07 * s;
+  c.save();
+  c.shadowColor = 'rgba(25, 30, 32, 0.45)';
+  c.shadowBlur = 0.05 * s;
+  c.shadowOffsetY = 0.02 * s;
+  c.lineWidth = band;
+  c.strokeStyle = '#b48a58';
+  c.beginPath();
+  c.arc(x, y, radius + band / 2, 0, Math.PI * 2);
+  c.stroke();
+  c.restore();
+  const wood = c.createRadialGradient(x, y, radius, x, y, radius + band);
+  wood.addColorStop(0, '#9c7244');
+  wood.addColorStop(0.35, '#d7b07a');
+  wood.addColorStop(0.6, '#c99f69');
+  wood.addColorStop(1, '#8c6238');
+  c.lineWidth = band;
+  c.strokeStyle = wood;
+  c.beginPath();
+  c.arc(x, y, radius + band / 2, 0, Math.PI * 2);
+  c.stroke();
+  c.lineWidth = Math.max(0.0025 * s, 0.6);
+  for (let k = 0; k < 26; k++) {
+    const start = hash(k, 3) * Math.PI * 2, span = 0.4 + hash(k, 5) * 1.6;
+    c.strokeStyle = `rgba(110, 70, 35, ${0.12 + 0.18 * hash(k, 7)})`;
+    c.beginPath();
+    c.arc(x, y, radius + band * (0.15 + 0.7 * hash(k, 9)), start, start + span);
+    c.stroke();
+  }
+  const screwY = y - radius - band;
+  const brass = c.createLinearGradient(x - 0.05 * s, 0, x + 0.05 * s, 0);
+  brass.addColorStop(0, '#7a6232');
+  brass.addColorStop(0.45, '#e3cd8a');
+  brass.addColorStop(1, '#6e5528');
+  c.fillStyle = brass;
+  c.shadowColor = 'rgba(25, 30, 32, 0.4)';
+  c.shadowBlur = 0.02 * s;
+  c.fillRect(x - 0.05 * s, screwY - 0.035 * s, 0.1 * s, 0.05 * s);
+  c.beginPath();
+  c.arc(x, screwY - 0.06 * s, 0.03 * s, 0, Math.PI * 2);
+  c.fill();
+}
+
+let view, cloth, sprites, work, drawn = 0, cycle = -1;
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio, 2);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width === w && canvas.height === h) return;
+  canvas.width = w;
+  canvas.height = h;
+  const s = Math.min(w, h) * 0.45 / (HOOP + 0.07);
+  view = { w, h, s, cell: CELL * s, ox: w / 2 - CENTER.x * s, oy: h / 2 + CENTER.y * s };
+  cloth = renderCloth(view);
+  sprites = FLOSS.map(([hex]) => [legSprite(hex, false, view.cell), legSprite(hex, true, view.cell)]);
+  work = new OffscreenCanvas(w, h).getContext('2d');
+  drawn = 0;
+}
+
+const hole = (i, j) => [view.ox + i * view.cell, view.oy - j * view.cell];
+
+function drawLeg({ i, j, floss, top }) {
+  const sprite = sprites[floss][top ? 1 : 0];
+  const [x, y] = hole(i + 0.5, j + 0.5);
+  work.drawImage(sprite, x - sprite.width / 2, y - sprite.height / 2);
+}
+
+function drawBackstitch({ x0, y0, x1, y1 }) {
+  work.save();
+  work.lineCap = 'round';
+  work.lineWidth = view.cell * 0.13;
+  work.strokeStyle = BACKSTITCH;
+  work.shadowColor = 'rgba(20, 15, 10, 0.5)';
+  work.shadowBlur = view.cell * 0.08;
+  work.shadowOffsetY = view.cell * 0.05;
+  const inset = 0.1;
+  const [ax, ay] = hole(x0 + (x1 - x0) * inset, y0 + (y1 - y0) * inset);
+  const [bx, by] = hole(x1 - (x1 - x0) * inset, y1 - (y1 - y0) * inset);
+  work.beginPath();
+  work.moveTo(ax, ay);
+  work.lineTo(bx, by);
+  work.stroke();
+  work.restore();
+}
+
+// Stitches are laid onto a persistent layer as their time comes, never redrawn.
+function stitchUpTo(t) {
+  const steps = legs.length + runs.length;
+  while (drawn < steps) {
+    const next = drawn < legs.length ? legs[drawn] : runs[drawn - legs.length];
+    if (next.time > t) break;
+    if (drawn < legs.length) drawLeg(next);
+    else drawBackstitch(next);
+    drawn++;
+  }
+}
+
+function frame(ms) {
+  resize();
+  const t = ms / 1000;
+  if (Math.floor(t / CYCLE) !== cycle) {
+    cycle = Math.floor(t / CYCLE);
+    work.clearRect(0, 0, view.w, view.h);
+    drawn = 0;
+  }
+  const u = t % CYCLE;
+  stitchUpTo(u);
+  ctx.globalAlpha = 1;
+  ctx.drawImage(cloth, 0, 0);
+  ctx.globalAlpha = 1 - Math.min(Math.max((u - CYCLE + FADE) / FADE, 0), 1);
+  ctx.drawImage(work.canvas, 0, 0);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

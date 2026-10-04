@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shuffle</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    display: grid; place-items: center;
+    background: radial-gradient(90% 70% at 50% 45%, #3f5257, #2a383c 70%, #222e31);
+  }
+  /* A 4:3 stage; 1em is 1% of its width. */
+  .stage {
+    --w: min(94vw, 125vh);
+    position: relative; width: var(--w); height: calc(var(--w) * 0.75); font-size: calc(var(--w) / 100);
+  }
+  .item { position: relative; width: calc(var(--h) * 1em); height: calc(var(--h) * 1em); flex: none; }
+  .body { position: absolute; inset: 0; overflow: visible; transform-origin: 50% 100%; }
+  .head { transform-box: fill-box; transform-origin: 50% 100%; }
+  .shadow {
+    position: absolute; left: 10%; right: 10%; bottom: -4%; height: 8%; border-radius: 50%;
+    background: radial-gradient(closest-side, #10181acc, #10181a00);
+  }
+
+  /* The layouts are ordinary CSS; the script only measures where things land. */
+  .lineup { display: flex; align-items: flex-end; justify-content: center; box-sizing: border-box; padding-bottom: 20em; }
+  .lineup .item { margin: 0 calc(var(--h) * -0.1em); }
+  .grid {
+    display: grid; grid-template-columns: repeat(3, 24em); grid-auto-rows: 21em;
+    place-content: center; place-items: end center;
+  }
+  .ring .item, .meadow .item {
+    position: absolute; left: calc(var(--x) * 1% - var(--h) * 0.5em); bottom: calc(var(--y) * 1%);
+  }
+  .ring .item { --x: calc(50 + 36 * cos(var(--a))); --y: calc(42 + 15 * sin(var(--a))); }
+  .meadow .item { --x: var(--mx); --y: var(--my); }
+</style>
+</head>
+<body>
+<svg width="0" height="0">
+  <defs>
+    <radialGradient id="cap-shade" cx="32" cy="-1110" r="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6e130b"/>
+      <stop offset="1" stop-color="#b8321a"/>
+    </radialGradient>
+    <g id="stem">
+      <path fill="#e8e2d2" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+      <path fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+    </g>
+    <g id="head">
+      <path fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+      <path fill="url(#cap-shade)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+      <g fill="#efe7d6">
+        <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+        <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+        <ellipse cx="-188" cy="-1030" rx="28" ry="22"/>
+        <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+        <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+        <ellipse cx="92" cy="-990" rx="34" ry="27"/>
+        <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+        <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+        <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+        <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+        <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+        <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+        <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+        <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+      </g>
+    </g>
+  </defs>
+</svg>
+<div class="stage lineup"></div>
+<template>
+  <div class="item">
+    <div class="shadow"></div>
+    <svg class="body" viewBox="-530 -1120 1125 1120"><use href="#stem"/><use class="head" href="#head"/></svg>
+  </div>
+</template>
+<script type="module">
+const COUNT = 9;
+const stage = document.querySelector('.stage');
+const template = document.querySelector('template');
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Around the ring the biggest stands nearest, the rest alternate sides as they shrink away.
+function ringAngle(rank) {
+  return -90 + (rank % 2 ? 1 : -1) * Math.ceil(rank / 2) * 360 / COUNT;
+}
+
+const items = Array.from({ length: COUNT }, (_, i) => {
+  const el = template.content.firstElementChild.cloneNode(true);
+  const height = 7 + i * 1.6;
+  el.style.setProperty('--h', height);
+  el.style.setProperty('--a', `${ringAngle(COUNT - 1 - i)}deg`);
+  // A loose meadow: taller ones nearer the front, a little jitter so it never looks planted.
+  el.style.setProperty('--mx', 14 + ((i * 5) % COUNT) / (COUNT - 1) * 72);
+  el.style.setProperty('--my', 50 - i * 3.6 + 5 * Math.sin(i * 2.3));
+  stage.append(el);
+  return { el, height, body: el.querySelector('.body'), head: el.querySelector('.head'), shadow: el.querySelector('.shadow') };
+});
+
+const bySize = (direction) => [...items].sort((a, b) => direction * (a.height - b.height));
+const ringDepth = (item) => Math.round(50 - 50 * Math.sin(ringAngle(COUNT - 1 - items.indexOf(item)) * Math.PI / 180));
+
+// Each layout names its CSS class, the order items take in it, and who paints in front.
+const layouts = [
+  { name: 'ring', order: items, depth: ringDepth },
+  { name: 'lineup', order: bySize(-1) },
+  { name: 'grid', order: bySize(1) },
+  { name: 'meadow', order: items, depth: (item) => items.indexOf(item) },
+  { name: 'lineup', order: bySize(1) },
+];
+
+function arrange({ name, order, depth }) {
+  stage.className = `stage ${name}`;
+  order.forEach((item, i) => {
+    item.el.style.order = i;
+    item.el.style.zIndex = depth ? depth(item) : '';
+  });
+}
+
+const easeInOut = 'cubic-bezier(0.6, 0, 0.3, 1)';
+const easeOut = 'cubic-bezier(0.2, 0.8, 0.4, 1)';
+const easeIn = 'cubic-bezier(0.6, 0, 0.8, 0.4)';
+
+// First, Last, Invert, Play: measure, change the layout, then animate each item from
+// where it was back to where CSS has just put it. Each one hops there, higher the farther it goes.
+function shuffle(layout) {
+  const first = items.map((item) => item.el.getBoundingClientRect());
+  arrange(layout);
+  const unit = parseFloat(getComputedStyle(stage).fontSize);
+  layout.order.forEach((item, rank) => {
+    const from = first[items.indexOf(item)];
+    const to = item.el.getBoundingClientRect();
+    const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+    const dy = from.bottom - to.bottom;
+    const distance = Math.hypot(dx, dy) / unit;
+    if (distance < 0.5) return;
+    const arc = calm ? 0 : Math.min(4 + Math.sqrt(distance) * 1.8, 13) / item.height;
+    const lean = Math.sign(-dx) * Math.min(14, distance * 0.4);
+    const options = { duration: calm ? 900 : 1000, delay: rank * (calm ? 0 : 70), fill: 'backwards' };
+    item.el.animate([
+      { offset: 0, translate: `${dx}px ${dy}px` },
+      { offset: 0.18, translate: `${dx}px ${dy}px`, easing: easeInOut },
+      { offset: 0.82, translate: '0 0' },
+      { offset: 1, translate: '0 0' },
+    ], options);
+    if (calm) return;
+    const s = (x, y) => `${x} ${y}`;
+    item.body.animate([
+      { translate: '0 0', scale: '1 1', rotate: '0deg', easing: easeInOut },
+      { offset: 0.16, translate: '0 0', scale: s(1.14, 0.82), rotate: `${-lean * 0.3}deg`, easing: easeOut },
+      { offset: 0.24, translate: '0 -2%', scale: s(0.88, 1.16), rotate: `${lean}deg`, easing: easeOut },
+      { offset: 0.5, translate: `0 ${-arc * 100}%`, scale: s(1, 1), rotate: '0deg', easing: easeIn },
+      { offset: 0.8, translate: '0 0', scale: s(0.92, 1.1), rotate: `${-lean * 0.6}deg` },
+      { offset: 0.86, translate: '0 0', scale: s(1.18, 0.8), rotate: '0deg', easing: easeOut },
+      { offset: 0.94, translate: '0 0', scale: s(0.97, 1.03), rotate: '0deg', easing: easeInOut },
+      { offset: 1, translate: '0 0', scale: '1 1', rotate: '0deg' },
+    ], options);
+    // The cap is a beat behind: pressed flat on take-off, flipped up by the drop.
+    item.head.animate([
+      { scale: '1 1', rotate: '0deg', easing: easeInOut },
+      { offset: 0.28, scale: s(1.1, 0.86), rotate: `${-lean * 0.5}deg`, easing: easeOut },
+      { offset: 0.45, scale: s(0.96, 1.06), rotate: `${lean * 0.3}deg`, easing: easeInOut },
+      { offset: 0.8, scale: s(0.94, 1.08), rotate: `${lean * 0.4}deg` },
+      { offset: 0.9, scale: s(1.14, 0.84), rotate: `${-lean * 0.2}deg`, easing: easeOut },
+      { offset: 1, scale: '1 1', rotate: '0deg' },
+    ], options);
+    item.shadow.animate([
+      { offset: 0, scale: 1, opacity: 1 },
+      { offset: 0.2, scale: 1, opacity: 1, easing: easeOut },
+      { offset: 0.5, scale: 0.5, opacity: 0.35, easing: easeIn },
+      { offset: 0.82, scale: 1, opacity: 1 },
+      { offset: 1, scale: 1, opacity: 1 },
+    ], options);
+  });
+}
+
+arrange(layouts.at(-1));
+let next = 0;
+let timer;
+function cycle() {
+  shuffle(layouts[next]);
+  next = (next + 1) % layouts.length;
+  timer = setTimeout(cycle, calm ? 4200 : 3400);
+}
+timer = setTimeout(cycle, 900);
+addEventListener('pointerdown', () => {
+  clearTimeout(timer);
+  cycle();
+});
+</script>
+</body>
+</html>

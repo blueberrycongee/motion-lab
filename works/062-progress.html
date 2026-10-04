@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Progress</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    --m: min(46vmin, 40vw);
+    --bar: min(100vw - var(--m) - 6vw, 110vmin);
+    --thick: calc(var(--m) * 0.075);
+    display: grid;
+    place-items: center;
+    background: radial-gradient(ellipse at 50% 35%, #ecd6a2, #d8b977 75%, #cfad68);
+  }
+  .meter {
+    position: relative;
+    width: var(--bar);
+    height: var(--thick);
+    margin-top: calc(var(--m) * 0.9);
+    translate: calc(var(--m) * -0.06) 0;
+    border-radius: var(--thick);
+    background: #6d5539;
+    box-shadow: inset 0 calc(var(--thick) * 0.18) calc(var(--thick) * 0.3) #3b2b1a99, 0 calc(var(--thick) * 0.08) 0 #fff4;
+    cursor: ew-resize;
+    touch-action: none;
+  }
+  .meter::before {
+    content: "";
+    position: absolute;
+    inset: calc(var(--thick) * -1.5) 0;
+  }
+  .meter:focus-visible { outline: calc(var(--thick) * 0.12) solid #6e130b88; outline-offset: calc(var(--thick) * 0.4); }
+  .fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    min-width: var(--thick);
+    border-radius: inherit;
+    background:
+      repeating-linear-gradient(-45deg, #fff0 0 calc(var(--thick) * 0.5), #ffffff1c 0 var(--thick)),
+      linear-gradient(#86a05c, #5f7c40);
+    background-size: calc(var(--thick) * 1.414 * 2) 100%, 100% 100%;
+    box-shadow: inset 0 calc(var(--thick) * 0.12) 0 #ffffff33;
+    animation: crawl 900ms linear infinite;
+  }
+  .complete .fill { animation-play-state: paused; }
+  @keyframes crawl { to { background-position: calc(var(--thick) * 1.414 * 2) 0, 0 0; } }
+  .grower {
+    position: absolute;
+    bottom: 50%;
+    width: var(--m);
+    translate: -50% 0;
+    pointer-events: none;
+  }
+  .grower svg { display: block; width: 100%; overflow: visible; }
+  .spots ellipse { transform-box: fill-box; transform-origin: center; }
+  @media (prefers-reduced-motion: reduce) { .fill { animation: none; } }
+</style>
+</head>
+<body>
+<div class="meter" role="progressbar" tabindex="0" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+  <div class="fill"></div>
+  <div class="grower">
+    <svg viewBox="-620 -1160 1240 1160">
+      <g class="plant">
+        <g class="stem">
+          <path fill="#e8e2d2" d="M175 0 L153 -43 L138 -86 L127 -129 L120 -172 L115 -215 L112 -258 L110 -301 L109 -344 L108 -387 L108 -430 L108 -473 L109 -516 L110 -559 L111 -602 L112 -645 L114 -688 L116 -731 L118 -774 L120 -817 L122 -860 L-48 -860 L-53 -817 L-58 -774 L-62 -731 L-66 -688 L-71 -645 L-75 -602 L-79 -559 L-82 -516 L-86 -473 L-90 -430 L-93 -387 L-97 -344 L-101 -301 L-106 -258 L-111 -215 L-117 -172 L-126 -129 L-137 -86 L-153 -43 L-175 0 Z"/>
+          <path class="ring" fill="#ddd5c2" d="M145 -555 L132 -605 L119 -655 L-76 -655 L-95 -605 L-114 -555 Z"/>
+        </g>
+        <g class="cap">
+          <path fill="#d2c6ad" d="M-518 -822 Q32 -862 582 -822 L552 -800 Q32 -830 -488 -800 Z"/>
+          <path fill="url(#capShade)" d="M591 -820 A560 310 0 1 0 -527 -820 Q32 -860 591 -820 Z"/>
+          <g class="spots" fill="#efe7d6">
+            <ellipse cx="12" cy="-1070" rx="30" ry="24"/>
+            <ellipse cx="202" cy="-1050" rx="26" ry="21"/>
+            <ellipse cx="-188" cy="-1030" rx="28" ry="22"/>
+            <ellipse cx="362" cy="-990" rx="30" ry="24"/>
+            <ellipse cx="-348" cy="-960" rx="24" ry="19"/>
+            <ellipse cx="92" cy="-990" rx="34" ry="27"/>
+            <ellipse cx="-88" cy="-940" rx="22" ry="18"/>
+            <ellipse cx="252" cy="-930" rx="25" ry="20"/>
+            <ellipse cx="472" cy="-900" rx="20" ry="16"/>
+            <ellipse cx="-438" cy="-880" rx="18" ry="14"/>
+            <ellipse cx="-248" cy="-890" rx="26" ry="21"/>
+            <ellipse cx="132" cy="-880" rx="20" ry="16"/>
+            <ellipse cx="372" cy="-875" rx="17" ry="14"/>
+            <ellipse cx="-28" cy="-880" rx="16" ry="13"/>
+          </g>
+        </g>
+      </g>
+      <g class="confetti"></g>
+      <defs>
+        <radialGradient id="capShade" cx="-40" cy="-1110" r="650" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#6e130b"/>
+          <stop offset="1" stop-color="#b8321a"/>
+        </radialGradient>
+      </defs>
+    </svg>
+  </div>
+</div>
+<script type="module">
+const meter = document.querySelector('.meter');
+const fill = meter.querySelector('.fill');
+const grower = meter.querySelector('.grower');
+const plant = meter.querySelector('.plant');
+const stem = meter.querySelector('.stem');
+const ring = meter.querySelector('.ring');
+const cap = meter.querySelector('.cap');
+const spots = [...meter.querySelectorAll('.spots ellipse')];
+const confetti = meter.querySelector('.confetti');
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const clamp01 = (k) => Math.min(Math.max(k, 0), 1);
+const smooth = (k) => k * k * (3 - 2 * k);
+const span = (k, from, to) => smooth(clamp01((k - from) / (to - from)));
+
+// `target` is the reported progress; `shown` chases it on a critically damped spring.
+let target = 0, shown = 0, speed = 0;
+let complete = false;
+
+// Hops are pure functions of time since they started: crouch, parabola, landing squash.
+let hopStart = -Infinity, hopHeight = 0, hopMs = 420;
+function hopPose(ms) {
+  const p = (ms - hopStart) / hopMs;
+  if (p < 0 || p > 1.6) return { y: 0, squash: 0 };
+  if (p < 0.2) return { y: 0, squash: 0.14 * smooth(p / 0.2) * Math.min(hopHeight / 60, 1) };
+  if (p < 1) {
+    const u = (p - 0.2) / 0.8;
+    return { y: hopHeight * 4 * u * (1 - u), squash: -0.08 * Math.abs(1 - 2 * u) * Math.min(hopHeight / 60, 1) };
+  }
+  const u = (p - 1) / 0.6;
+  return { y: 0, squash: 0.12 * Math.exp(-u * 3) * Math.sin(u * Math.PI * 2.5) * Math.min(hopHeight / 60, 1) };
+}
+
+function hop(height, ms) {
+  if (calm) return;
+  hopStart = performance.now();
+  hopHeight = height;
+  hopMs = ms;
+}
+
+// Size follows progress: a button at 0, a stem that lengthens, a cap that opens and spreads.
+function pose(p, ms) {
+  const { y, squash } = hopPose(ms);
+  const size = 0.16 + 0.84 * span(p, 0, 1);
+  // The cap trails the base as the bar pulls it along.
+  const lean = Math.max(Math.min(-speed * 14, 8), -8);
+  plant.setAttribute('transform',
+    `translate(0 ${-y}) rotate(${lean}) scale(${size * (1 + squash * 0.8)} ${size * (1 - squash)})`);
+  const height = 0.3 + 0.7 * span(p, 0, 0.7);
+  stem.setAttribute('transform', `scale(${0.75 + 0.25 * span(p, 0.1, 0.8)} ${height})`);
+  ring.style.opacity = span(p, 0.4, 0.7);
+  const open = span(p, 0.25, 0.9);
+  cap.setAttribute('transform', `translate(0 ${-860 * (height - 1)}) translate(32 -820) `
+    + `scale(${0.55 + 0.45 * open} ${1.3 - 0.3 * open}) translate(-32 820)`);
+}
+
+let last = performance.now();
+function frame(ms) {
+  const dt = Math.min((ms - last) / 1000, 1 / 30);
+  last = ms;
+  const stiffness = 90;
+  speed += ((target - shown) * stiffness - speed * 2 * Math.sqrt(stiffness)) * dt;
+  shown += speed * dt;
+  fill.style.width = `${(clamp01(shown) * 100).toFixed(2)}%`;
+  grower.style.left = `${(clamp01(shown) * 100).toFixed(2)}%`;
+  meter.setAttribute('aria-valuenow', Math.round(target * 100));
+  pose(clamp01(shown), ms);
+  if (!complete && target >= 1 && shown > 0.995) celebrate();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// Done: a big hop, the warts pop from the crown out, and spores burst like confetti.
+function celebrate() {
+  complete = true;
+  meter.classList.add('complete');
+  fill.animate([{ filter: 'brightness(1.35)' }, { filter: 'none' }], { duration: 900, easing: 'ease-out' });
+  if (calm) return;
+  hop(300, 720);
+  spots.forEach((spot) => {
+    const distance = Math.hypot(spot.cx.baseVal.value - 32, spot.cy.baseVal.value + 1110);
+    spot.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.6)', offset: 0.35 }, { transform: 'scale(1)' }],
+      { duration: 520, delay: 160 + distance * 0.5, easing: 'cubic-bezier(0.3, 0, 0.3, 1)' });
+  });
+  setTimeout(burst, 300);
+}
+
+function burst() {
+  const colors = ['#efe7d6', '#efe7d6', '#b8321a', '#5f7c40'];
+  for (let i = 0; i < 28; i++) {
+    const piece = document.createElementNS('http://www.w3.org/2000/svg', 'ellipse');
+    piece.setAttribute('cx', 32);
+    piece.setAttribute('cy', -900);
+    piece.setAttribute('rx', 14 + Math.random() * 16);
+    piece.setAttribute('ry', 10 + Math.random() * 10);
+    piece.setAttribute('fill', colors[i % colors.length]);
+    confetti.append(piece);
+    const angle = -Math.PI / 2 + (Math.random() - 0.5) * 2.6;
+    const reach = 380 + Math.random() * 420;
+    const dx = Math.cos(angle) * reach, dy = Math.sin(angle) * reach;
+    const spin = (Math.random() - 0.5) * 720;
+    piece.animate([
+      { transform: 'translate(0px, 0px) rotate(0deg) scale(0.3)', opacity: 1 },
+      { transform: `translate(${dx}px, ${dy}px) rotate(${spin * 0.5}deg) scale(1)`, opacity: 1, offset: 0.35 },
+      { transform: `translate(${dx * 1.25}px, ${dy + 900}px) rotate(${spin}deg) scale(0.8)`, opacity: 0 },
+    ], { duration: 1700 + Math.random() * 700, easing: 'cubic-bezier(0.2, 0.55, 0.45, 1)' })
+      .finished.then(() => piece.remove());
+  }
+}
+
+function reset() {
+  complete = false;
+  meter.classList.remove('complete');
+  target = 0;
+}
+
+// Progress arrives in uneven chunks, the way real work reports it; each chunk is a hop.
+function advance(amount) {
+  if (complete) return;
+  target = Math.min(target + amount, 1);
+  hop(30 + amount * 500, 380 + amount * 600);
+}
+
+// Real input takes over from the demo, which resumes after a few idle seconds.
+const IDLE_MS = 4000;
+let lastInput = -IDLE_MS;
+const userActive = () => performance.now() - lastInput < IDLE_MS;
+
+function scrub(event) {
+  const box = meter.getBoundingClientRect();
+  const next = clamp01((event.clientX - box.left) / box.width);
+  if (complete && next < 1) reset();
+  target = next;
+}
+meter.addEventListener('pointerdown', (event) => {
+  lastInput = performance.now();
+  meter.setPointerCapture(event.pointerId);
+  scrub(event);
+});
+meter.addEventListener('pointermove', (event) => {
+  if (!meter.hasPointerCapture(event.pointerId)) return;
+  lastInput = performance.now();
+  scrub(event);
+});
+meter.addEventListener('keydown', (event) => {
+  const step = { ArrowRight: 0.1, ArrowUp: 0.1, ArrowLeft: -0.1, ArrowDown: -0.1 }[event.key];
+  if (step === undefined) return;
+  event.preventDefault();
+  lastInput = performance.now();
+  if (step < 0) {
+    if (complete) reset();
+    target = Math.max(target + step, 0);
+  } else {
+    advance(step);
+  }
+});
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function demo() {
+  await wait(700);
+  for (;;) {
+    if (userActive()) {
+      await wait(500);
+      continue;
+    }
+    if (complete) {
+      await wait(2200);
+      if (!userActive()) reset();
+      await wait(1300);
+      continue;
+    }
+    advance(0.05 + Math.random() * 0.17);
+    await wait(320 + Math.random() * 520);
+  }
+}
+demo();
+</script>
+</body>
+</html>
