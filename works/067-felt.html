@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Felt</title>
+<meta name="description" content="A needle-felted mushroom gently breathes, with layered wool fibres catching the light.">
+<style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#ebe5d8}canvas{display:block;width:100%;height:100%;touch-action:none}</style>
+</head>
+<body>
+<canvas aria-label="A needle-felted mushroom gently breathes, with layered wool fibres catching the light."></canvas>
+<script type="module">
+function mushroomPaths() {
+  const lean = (y) => 0.05 * y * y;
+  const stemR = (y) => 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  const outline = (y0, y1, radius) => {
+    const path = new Path2D();
+    const n = 32;
+    for (let i = 0; i <= n; i++) {
+      const y = y0 + (y1 - y0) * (i / n);
+      path.lineTo(lean(y) + radius(y), y);
+    }
+    for (let i = n; i >= 0; i--) {
+      const y = y0 + (y1 - y0) * (i / n);
+      path.lineTo(lean(y) - radius(y), y);
+    }
+    path.closePath();
+    return path;
+  };
+  const stem = outline(0, 0.86, stemR);
+  const ring = outline(0.555, 0.655, (y) => 0.096 + (0.66 - y) * 0.32);
+
+  const cx = lean(0.8), a = Math.asin(0.02 / 0.31);
+  const cap = new Path2D();
+  cap.ellipse(cx, 0.8, 0.56, 0.31, 0, a, Math.PI - a);
+  cap.quadraticCurveTo(cx, 0.86, cx + 0.559, 0.82);
+  cap.closePath();
+
+  const gills = new Path2D();
+  gills.moveTo(cx - 0.55, 0.822);
+  gills.quadraticCurveTo(cx, 0.862, cx + 0.55, 0.822);
+  gills.lineTo(cx + 0.52, 0.8);
+  gills.quadraticCurveTo(cx, 0.83, cx - 0.52, 0.8);
+  gills.closePath();
+
+  // Warts on the visible face of the cap: [x, y, radius].
+  const spots = [
+    [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+    [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+    [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+    [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+  ].map(([x, y, r]) => {
+    const path = new Path2D();
+    path.ellipse(cx + x, y, r, r * 0.8, 0, 0, Math.PI * 2);
+    return path;
+  });
+  return { cap, gills, stem, ring, spots };
+}
+
+
+const mushroom=mushroomPaths();
+const silhouette=new Path2D();
+for(const name of ['stem','ring','gills','cap'])silhouette.addPath(mushroom[name]);
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d');
+let width=0,height=0,scale=1,cx=0,ground=0;
+const pointer={x:0,y:0,active:false};
+addEventListener('pointermove',event=>{pointer.x=event.clientX/innerWidth*2-1;pointer.y=event.clientY/innerHeight*2-1;pointer.active=true});
+addEventListener('pointerleave',()=>pointer.active=false);
+const calm=matchMedia('(prefers-reduced-motion: reduce)').matches;
+let seed=42;
+const random=()=>((seed=(Math.imul(seed,1664525)+1013904223)>>>0)/4294967296);
+function resize(){
+ const dpr=Math.min(devicePixelRatio,2),w=Math.max(1,Math.round(innerWidth*dpr)),h=Math.max(1,Math.round(innerHeight*dpr));
+ if(w===width&&h===height)return false;
+ width=canvas.width=w;height=canvas.height=h;scale=Math.min(width*.66,height*.7);cx=width*.5;ground=height*.82;return true;
+}
+function space(){ctx.setTransform(scale,0,0,-scale,cx,ground)}
+function fill(path,color){ctx.fillStyle=color;ctx.fill(path)}
+function background(color){ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';ctx.shadowBlur=0;ctx.fillStyle=color;ctx.fillRect(0,0,width,height)}
+function shadow(color='rgba(0,0,0,.15)'){space();ctx.save();ctx.scale(1,.12);ctx.fillStyle=color;ctx.beginPath();ctx.ellipse(0,0,.55,.22,0,0,Math.PI*2);ctx.fill();ctx.restore()}
+function portrait(cap='#b8321a',stem='#e8e2d2',spots='#efe7d6'){
+ fill(mushroom.stem,stem);fill(mushroom.ring,stem);fill(mushroom.gills,stem);fill(mushroom.cap,cap);for(const spot of mushroom.spots)fill(spot,spots);
+}
+
+
+const wool=document.createElement('canvas');wool.width=800;wool.height=800;const wc=wool.getContext('2d');
+wc.setTransform(580,0,0,-580,400,720);
+function feltPart(path,color){
+ wc.save();wc.clip(path);wc.fillStyle=color;wc.fill(path);
+ const light=wc.createLinearGradient(-.45,1.2,.45,.1);light.addColorStop(0,'rgba(255,238,210,.24)');light.addColorStop(.35,'rgba(255,238,210,0)');light.addColorStop(1,'rgba(47,19,9,.42)');wc.fillStyle=light;wc.fill(path);
+ wc.strokeStyle='rgba(60,27,12,.14)';wc.lineWidth=.017;wc.shadowColor='rgba(60,27,12,.22)';wc.shadowBlur=8;wc.stroke(path);wc.shadowBlur=0;
+ for(let i=0;i<18000;i++){
+  const x=random()*1.4-.7,y=random()*1.4-.1;
+  if(!probe.isPointInPath(path,x,y))continue;
+  const a=random()*Math.PI*2,l=.003+random()*.014;
+  wc.strokeStyle=random()<.55?'rgba(255,243,211,.17)':'rgba(25,13,9,.13)';wc.lineWidth=.0006+random()*.0015;
+  wc.beginPath();wc.moveTo(x,y);wc.quadraticCurveTo(x+Math.cos(a+.6)*l*.6,y+Math.sin(a+.6)*l*.6,x+Math.cos(a)*l,y+Math.sin(a)*l);wc.stroke();
+ }
+ wc.restore();
+}
+// Path hit testing uses an untransformed context; fibres are generated in mushroom units.
+const probe=document.createElement('canvas').getContext('2d');
+feltPart(mushroom.stem,'#dbcfb5');feltPart(mushroom.ring,'#eee4cf');feltPart(mushroom.gills,'#bfae8f');feltPart(mushroom.cap,'#a63628');for(const spot of mushroom.spots)feltPart(spot,'#efe6d2');
+
+function draw(time){
+
+ background('#b9b0a0');
+ const paper=ctx.createRadialGradient(width*.35,height*.3,0,width*.5,height*.5,Math.max(width,height)*.7);paper.addColorStop(0,'rgba(250,240,216,.55)');paper.addColorStop(1,'rgba(41,32,24,.08)');ctx.fillStyle=paper;ctx.fillRect(0,0,width,height);
+ shadow('rgba(49,39,27,.18)');space();
+ ctx.save();ctx.translate(0,.04);ctx.rotate(.014*Math.sin(time*.7)+(pointer.active?pointer.x*.025:0));
+ const breath=1+.012*Math.sin(time*1.2);ctx.scale(breath,1/breath);
+ ctx.shadowColor='rgba(48,29,17,.18)';ctx.shadowBlur=scale*.035;ctx.shadowOffsetY=scale*.02;
+ ctx.scale(1,-1);ctx.drawImage(wool,-400/580,-720/580,800/580,800/580);ctx.restore();ctx.shadowOffsetY=0;
+ 
+}
+function frame(ms){resize();draw(calm?0:ms/1000);requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
