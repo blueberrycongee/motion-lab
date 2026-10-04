@@ -78,17 +78,23 @@ const waves = [
   [7.1, 5.2, 0.62, 0.008, 0.9],
 ];
 
-function airflow(x, y, t) {
-  // The breeze turns slowly, so the plume swings from side to side.
-  let u = 0.03 + 0.11 * Math.sin(t * 0.09), v = 0.05;
-  for (const [kx, ky, w, a, phase] of waves) {
-    const c = a * Math.cos(kx * x + ky * y + w * t + phase);
+// Time-dependent wind terms are shared by every particle in one simulation step.
+const waveTime = new Float64Array(waves.length);
+const velocity = new Float64Array(2);
+let breeze = 0;
+
+function airflow(x, y, out) {
+  let u = breeze, v = 0.05;
+  for (let i = 0; i < waves.length; i++) {
+    const [kx, ky, , a, phase] = waves[i];
+    const c = a * Math.cos(kx * x + ky * y + waveTime[i] + phase);
     u += c * ky;
     v -= c * kx;
   }
   // The cap shelters the still air beneath it.
   const calm = 1 - 0.7 * smoothstep(0.7, 0.35, Math.abs(x - 0.03)) * smoothstep(1.0, 0.8, y);
-  return [u * calm, v * calm];
+  out[0] = u * calm;
+  out[1] = v * calm;
 }
 
 // Where the sunbeam crosses the scene: 1 on its axis, falling off to 0.
@@ -124,20 +130,22 @@ function releaseMote(m) {
 let view = { s: 1, x: 0, y: 0, w: 1, h: 1 };
 
 function step(dt, t) {
+  breeze = 0.03 + 0.11 * Math.sin(t * 0.09);
+  for (let i = 0; i < waves.length; i++) waveTime[i] = waves[i][2] * t;
   const halfW = view.w / 2 / view.s + 0.1, top = view.y / view.s + 0.1;
   for (let i = 0; i < COUNT; i++) {
-    const [u, v] = airflow(px[i], py[i], t);
+    airflow(px[i], py[i], velocity);
     // Freshly shed spores drop out of the gills before the air takes them.
     const drop = 0.12 * Math.exp(-age[i] * 0.5);
-    px[i] += u * dt;
-    py[i] += (v - drop) * dt;
+    px[i] += velocity[0] * dt;
+    py[i] += (velocity[1] - drop) * dt;
     age[i] += dt;
     if (age[i] > life[i] || py[i] < 0 || py[i] > top || Math.abs(px[i]) > halfW) release(i);
   }
   for (const m of mote) {
-    const [u, v] = airflow(m.x, m.y, t);
-    m.x += u * 1.8 * dt;
-    m.y += v * 1.8 * dt;
+    airflow(m.x, m.y, velocity);
+    m.x += velocity[0] * 1.8 * dt;
+    m.y += velocity[1] * 1.8 * dt;
     m.age += dt;
     if (m.age > m.life) releaseMote(m);
   }
