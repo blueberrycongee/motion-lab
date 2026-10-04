@@ -20,7 +20,7 @@ npm run build    # 构建静态站点到 dist/
 
 ## 封面
 
-画廊同时只运行少数几个画框，其余显示 `posters/` 里的静帧。新增或修改作品后重新生成：
+画廊里的作品进入视口后自动播放，离开视口即释放画框。`posters/` 里的静帧用于加载前的封面。新增或修改作品后重新生成：
 
 ```sh
 npx playwright install chromium   # 首次
