@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Copper Wire</title>
+<meta name="description" content="A rotating copper-wire mushroom reveals its open armature and brass loops in three dimensions.">
+<style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#ebe5d8}canvas{display:block;width:100%;height:100%;touch-action:none}</style>
+</head>
+<body>
+<canvas aria-label="A rotating copper-wire mushroom reveals its open armature and brass loops in three dimensions."></canvas>
+<script type="module">
+function mushroomPaths() {
+  const lean = (y) => 0.05 * y * y;
+  const stemR = (y) => 0.085 + 0.025 * (1 - y / 0.86) + 0.065 * Math.exp(-y * 9);
+  const outline = (y0, y1, radius) => {
+    const path = new Path2D();
+    const n = 32;
+    for (let i = 0; i <= n; i++) {
+      const y = y0 + (y1 - y0) * (i / n);
+      path.lineTo(lean(y) + radius(y), y);
+    }
+    for (let i = n; i >= 0; i--) {
+      const y = y0 + (y1 - y0) * (i / n);
+      path.lineTo(lean(y) - radius(y), y);
+    }
+    path.closePath();
+    return path;
+  };
+  const stem = outline(0, 0.86, stemR);
+  const ring = outline(0.555, 0.655, (y) => 0.096 + (0.66 - y) * 0.32);
+
+  const cx = lean(0.8), a = Math.asin(0.02 / 0.31);
+  const cap = new Path2D();
+  cap.ellipse(cx, 0.8, 0.56, 0.31, 0, a, Math.PI - a);
+  cap.quadraticCurveTo(cx, 0.86, cx + 0.559, 0.82);
+  cap.closePath();
+
+  const gills = new Path2D();
+  gills.moveTo(cx - 0.55, 0.822);
+  gills.quadraticCurveTo(cx, 0.862, cx + 0.55, 0.822);
+  gills.lineTo(cx + 0.52, 0.8);
+  gills.quadraticCurveTo(cx, 0.83, cx - 0.52, 0.8);
+  gills.closePath();
+
+  // Warts on the visible face of the cap: [x, y, radius].
+  const spots = [
+    [-0.02, 1.07, 0.03], [0.17, 1.05, 0.026], [-0.22, 1.03, 0.028], [0.33, 0.99, 0.03],
+    [-0.38, 0.96, 0.024], [0.06, 0.99, 0.034], [-0.12, 0.94, 0.022], [0.22, 0.93, 0.025],
+    [0.44, 0.9, 0.02], [-0.47, 0.88, 0.018], [-0.28, 0.89, 0.026], [0.1, 0.88, 0.02],
+    [0.34, 0.875, 0.017], [-0.06, 0.88, 0.016],
+  ].map(([x, y, r]) => {
+    const path = new Path2D();
+    path.ellipse(cx + x, y, r, r * 0.8, 0, 0, Math.PI * 2);
+    return path;
+  });
+  return { cap, gills, stem, ring, spots };
+}
+
+
+const mushroom=mushroomPaths();
+const silhouette=new Path2D();
+for(const name of ['stem','ring','gills','cap'])silhouette.addPath(mushroom[name]);
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d');
+let width=0,height=0,scale=1,cx=0,ground=0;
+const pointer={x:0,y:0,active:false};
+addEventListener('pointermove',event=>{pointer.x=event.clientX/innerWidth*2-1;pointer.y=event.clientY/innerHeight*2-1;pointer.active=true});
+addEventListener('pointerleave',()=>pointer.active=false);
+const calm=matchMedia('(prefers-reduced-motion: reduce)').matches;
+let seed=42;
+const random=()=>((seed=(Math.imul(seed,1664525)+1013904223)>>>0)/4294967296);
+function resize(){
+ const dpr=Math.min(devicePixelRatio,2),w=Math.max(1,Math.round(innerWidth*dpr)),h=Math.max(1,Math.round(innerHeight*dpr));
+ if(w===width&&h===height)return false;
+ width=canvas.width=w;height=canvas.height=h;scale=Math.min(width*.66,height*.7);cx=width*.5;ground=height*.82;return true;
+}
+function space(){ctx.setTransform(scale,0,0,-scale,cx,ground)}
+function fill(path,color){ctx.fillStyle=color;ctx.fill(path)}
+function background(color){ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';ctx.shadowBlur=0;ctx.fillStyle=color;ctx.fillRect(0,0,width,height)}
+function shadow(color='rgba(0,0,0,.15)'){space();ctx.save();ctx.scale(1,.12);ctx.fillStyle=color;ctx.beginPath();ctx.ellipse(0,0,.55,.22,0,0,Math.PI*2);ctx.fill();ctx.restore()}
+function portrait(cap='#b8321a',stem='#e8e2d2',spots='#efe7d6'){
+ fill(mushroom.stem,stem);fill(mushroom.ring,stem);fill(mushroom.gills,stem);fill(mushroom.cap,cap);for(const spot of mushroom.spots)fill(spot,spots);
+}
+
+
+const wires=[];
+function wire(count,point,bright=false){const points=[];for(let i=0;i<=count;i++)points.push(point(i/count));wires.push({points,bright})}
+const capPoint=(theta,phi)=>{const y=.8+.31*Math.cos(theta),r=.56*Math.sin(theta);return [r*Math.cos(phi)+.05*y*y,y,r*Math.sin(phi)]};
+for(let j=1;j<=10;j++)wire(72,t=>capPoint(j/10*1.5,t*Math.PI*2));
+for(let j=0;j<24;j++)wire(28,t=>capPoint(t*1.5,j/24*Math.PI*2));
+const stemRadius=y=>.085+.025*(1-y/.86)+.065*Math.exp(-y*9);
+wire(760,t=>{const y=t*.86,r=stemRadius(y),a=t*Math.PI*84;return [r*Math.cos(a)+.05*y*y,y,r*Math.sin(a)]});
+for(let j=0;j<10;j++)wire(24,t=>{const y=t*.85,r=stemRadius(y),a=j/10*Math.PI*2;return [r*Math.cos(a)+.05*y*y,y,r*Math.sin(a)]});
+for(let j=0;j<24;j++)wire(8,t=>{const y=.555+t*.1,r=.096+(.66-y)*.32,a=j/24*Math.PI*2;return [r*Math.cos(a)+.05*y*y,y,r*Math.sin(a)]});
+for(const y of [.555,.655])wire(64,t=>{const r=.096+(.66-y)*.32,a=t*Math.PI*2;return [r*Math.cos(a)+.05*y*y,y,r*Math.sin(a)]},true);
+for(let j=0;j<30;j++){
+ const theta=.22+Math.sqrt(j/30)*1.17,phi=j*2.399963;
+ wire(20,t=>capPoint(theta+.047*Math.cos(t*Math.PI*2),phi+.047*Math.sin(t*Math.PI*2)/Math.sin(theta)),true);
+}
+
+function draw(time){
+
+ background('#182326');
+ const light=ctx.createRadialGradient(width*.42,height*.35,0,width*.5,height*.5,scale*1.1);light.addColorStop(0,'#344341');light.addColorStop(1,'#101b1e');ctx.fillStyle=light;ctx.fillRect(0,0,width,height);
+ shadow('rgba(0,0,0,.3)');space();
+ const spin=time*.18+(pointer.active?pointer.x*.8:0),ca=Math.cos(spin),sa=Math.sin(spin),tilt=.18+(pointer.active?-pointer.y*.1:0),ct=Math.cos(tilt),st=Math.sin(tilt);
+ ctx.lineCap='round';ctx.lineJoin='round';
+ for(const line of wires){
+  let depth=0;ctx.beginPath();
+  for(let i=0;i<line.points.length;i++){const p=line.points[i],x=p[0]*ca+p[2]*sa,z=p[2]*ca-p[0]*sa,y=(p[1]-.55)*ct-z*st+.55;depth+=z;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)}
+  depth=depth/line.points.length;const brightness=Math.max(0,Math.min(1,.5+depth));
+  ctx.strokeStyle=line.bright?'rgba(239,208,126,.88)':'rgba(208,135,90,'+(.28+brightness*.44)+')';ctx.lineWidth=line.bright?.004:.0025;ctx.stroke();
+ }
+ 
+}
+function frame(ms){resize();draw(calm?0:ms/1000);requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
