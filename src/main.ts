@@ -2,8 +2,6 @@ import './style.css';
 import { previewSource } from './preview';
 
 const SITE_TITLE = 'motion-lab';
-// Each live preview owns a render loop and may also hold a WebGL context.
-const MAX_LIVE = 8;
 
 type Work = {
   no: string;
@@ -83,28 +81,18 @@ function header(): HTMLElement {
 function renderGallery() {
   document.title = SITE_TITLE;
 
-  const visible = new Set<HTMLDivElement>();
-  let hovered: HTMLDivElement | null = null;
-
-  // Run the hovered frame plus the first visible ones in page order; the rest show posters.
-  function updateLive() {
-    const order = [...canvases].filter((c) => visible.has(c));
-    const live = new Set(order.filter((canvas) => canvas !== hovered).slice(0, MAX_LIVE - (hovered ? 1 : 0)));
-    if (hovered) live.add(hovered);
-    for (const canvas of canvases) {
-      const frame = canvas.querySelector('iframe');
-      if (live.has(canvas) && !frame) canvas.append(createFrame(works[Number(canvas.dataset.index)], true));
-      if (!live.has(canvas) && frame) frame.remove();
-    }
-  }
-
+  // Every visible work plays. Offscreen frames are removed to release their
+  // render loops and WebGL contexts, rather than leaving later cards blank.
   const observer = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       const canvas = entry.target as HTMLDivElement;
-      if (entry.isIntersecting) visible.add(canvas);
-      else visible.delete(canvas);
+      const frame = canvas.querySelector('iframe');
+      if (entry.isIntersecting && !frame) {
+        canvas.append(createFrame(works[Number(canvas.dataset.index)], true));
+      } else if (!entry.isIntersecting) {
+        frame?.remove();
+      }
     }
-    updateLive();
   });
 
   const canvases = works.map((work, index) => {
@@ -123,14 +111,6 @@ function renderGallery() {
         h('div', { className: 'frame' }, [canvases[index]]),
         placard(work),
       ]);
-      piece.addEventListener('pointerenter', () => {
-        hovered = canvases[index];
-        updateLive();
-      });
-      piece.addEventListener('pointerleave', () => {
-        hovered = null;
-        updateLive();
-      });
       return piece;
     }),
   );
