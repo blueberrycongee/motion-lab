@@ -1,8 +1,8 @@
 import './style.css';
+import { previewSource } from './preview';
 
 const SITE_TITLE = 'motion-lab';
-// Live frames each hold a WebGL context and a render loop. Browsers drop the
-// oldest contexts past about 16, and a laptop GPU struggles well before that.
+// Each live preview owns a render loop and may also hold a WebGL context.
 const MAX_LIVE = 8;
 
 type Work = {
@@ -60,8 +60,8 @@ function h<K extends keyof HTMLElementTagNameMap>(
   return el;
 }
 
-function createFrame(work: Work): HTMLIFrameElement {
-  const frame = h('iframe', { title: work.title, srcdoc: work.source });
+function createFrame(work: Work, preview = false): HTMLIFrameElement {
+  const frame = h('iframe', { title: work.title, srcdoc: preview ? previewSource(work.source) : work.source });
   // Works run with an opaque origin: they can animate but cannot touch the gallery.
   frame.sandbox.add('allow-scripts');
   // Reveal the frame once it has had time to draw, so the poster never flashes blank.
@@ -89,11 +89,11 @@ function renderGallery() {
   // Run the hovered frame plus the first visible ones in page order; the rest show posters.
   function updateLive() {
     const order = [...canvases].filter((c) => visible.has(c));
-    const live = new Set(order.slice(0, MAX_LIVE - (hovered ? 1 : 0)));
+    const live = new Set(order.filter((canvas) => canvas !== hovered).slice(0, MAX_LIVE - (hovered ? 1 : 0)));
     if (hovered) live.add(hovered);
     for (const canvas of canvases) {
       const frame = canvas.querySelector('iframe');
-      if (live.has(canvas) && !frame) canvas.append(createFrame(works[Number(canvas.dataset.index)]));
+      if (live.has(canvas) && !frame) canvas.append(createFrame(works[Number(canvas.dataset.index)], true));
       if (!live.has(canvas) && frame) frame.remove();
     }
   }
