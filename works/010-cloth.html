@@ -298,6 +298,8 @@ const STEP = 1 / 120;
 const GRAVITY = -9.8;
 const DRAG = 0.9;
 const AIR = 0.8;
+const DAMPING = DRAG ** (STEP * 4);
+const STEP_SQUARED = STEP * STEP;
 
 // Air pushes on each triangle along its normal, in proportion to the
 // wind's speed relative to the cloth, so a fold facing the gust billows.
@@ -309,24 +311,20 @@ function applyWind(force, t) {
     const e1x = pos[b] - pos[a], e1y = pos[b + 1] - pos[a + 1], e1z = pos[b + 2] - pos[a + 2];
     const e2x = pos[c] - pos[a], e2y = pos[c + 1] - pos[a + 1], e2z = pos[c + 2] - pos[a + 2];
     const nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
-    const area = Math.hypot(nx, ny, nz);
+    const areaSquared = nx * nx + ny * ny + nz * nz;
     // Eddies that travel across the banner with the wind.
     const x = pos[a], y = pos[a + 1];
     const ripple = 1 + 0.8 * Math.sin(x * 6 - t * 7 + y * 3 + Math.sin(y * 4 + t)) * Math.sin(y * 7 + t * 5 - x * 2);
     const eddyX = 1.5 * Math.sin(y * 5 + t * 6 + x), eddyZ = 2 * Math.sin(x * 5 - t * 8 + y * 3);
-    let vx = 0, vy = 0, vz = 0;
-    for (const p of [a, b, c]) {
-      vx += (pos[p] - prev[p]) / STEP;
-      vy += (pos[p + 1] - prev[p + 1]) / STEP;
-      vz += (pos[p + 2] - prev[p + 2]) / STEP;
-    }
+    const vx = ((pos[a] - prev[a]) + (pos[b] - prev[b]) + (pos[c] - prev[c])) / STEP;
+    const vy = ((pos[a + 1] - prev[a + 1]) + (pos[b + 1] - prev[b + 1]) + (pos[c + 1] - prev[c + 1])) / STEP;
+    const vz = ((pos[a + 2] - prev[a + 2]) + (pos[b + 2] - prev[b + 2]) + (pos[c + 2] - prev[c + 2])) / STEP;
     const rx = wx * ripple + eddyX - vx / 3, ry = wy - vy / 3, rz = wz * ripple + eddyZ - vz / 3;
-    const push = (nx * rx + ny * ry + nz * rz) / (area * area) * AIR;
-    for (const p of [a, b, c]) {
-      force[p] += nx * push;
-      force[p + 1] += ny * push;
-      force[p + 2] += nz * push;
-    }
+    const push = (nx * rx + ny * ry + nz * rz) / areaSquared * AIR;
+    const fx = nx * push, fy = ny * push, fz = nz * push;
+    force[a] += fx; force[b] += fx; force[c] += fx;
+    force[a + 1] += fy; force[b + 1] += fy; force[c + 1] += fy;
+    force[a + 2] += fz; force[b + 2] += fz; force[c + 2] += fz;
   }
 }
 
@@ -337,19 +335,20 @@ function step(t) {
   for (let p = 0; p < COUNT; p++) {
     const i = p * 3;
     // The bottom rows carry a weighted hem.
-    const mass = Math.floor(p / COLS) >= ROWS - 2 ? 2.5 : 1;
+    const mass = p >= (ROWS - 2) * COLS ? 2.5 : 1;
     for (let axis = 0; axis < 3; axis++) {
-      const velocity = (pos[i + axis] - prev[i + axis]) * DRAG ** (STEP * 4);
+      const velocity = (pos[i + axis] - prev[i + axis]) * DAMPING;
       prev[i + axis] = pos[i + axis];
       const accel = force[i + axis] / mass + (axis === 1 ? GRAVITY : 0);
-      pos[i + axis] += velocity + accel * STEP * STEP;
+      pos[i + axis] += velocity + accel * STEP_SQUARED;
     }
   }
   for (let iteration = 0; iteration < 10; iteration++) {
     for (let k = 0; k < constraints.length; k += 4) {
       const a = constraints[k] * 3, b = constraints[k + 1] * 3;
       const dx = pos[b] - pos[a], dy = pos[b + 1] - pos[a + 1], dz = pos[b + 2] - pos[a + 2];
-      const length = Math.hypot(dx, dy, dz);
+      // Coordinates stay in metre-scale simulation space; scaled hypot is unnecessary.
+      const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
       const correction = (length - constraints[k + 2]) / length * 0.5 * constraints[k + 3];
       pos[a] += dx * correction; pos[a + 1] += dy * correction; pos[a + 2] += dz * correction;
       pos[b] -= dx * correction; pos[b + 1] -= dy * correction; pos[b + 2] -= dz * correction;
@@ -370,14 +369,14 @@ function shade() {
     const e1x = pos[b] - pos[a], e1y = pos[b + 1] - pos[a + 1], e1z = pos[b + 2] - pos[a + 2];
     const e2x = pos[c] - pos[a], e2y = pos[c + 1] - pos[a + 1], e2z = pos[c + 2] - pos[a + 2];
     const nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
-    for (const p of [a, b, c]) {
-      normals[p] += nx; normals[p + 1] += ny; normals[p + 2] += nz;
-    }
+    normals[a] += nx; normals[b] += nx; normals[c] += nx;
+    normals[a + 1] += ny; normals[b + 1] += ny; normals[c + 1] += ny;
+    normals[a + 2] += nz; normals[b + 2] += nz; normals[c + 2] += nz;
   }
   for (let row = 0; row < ROWS; row++) {
     for (let col = 0; col < COLS; col++) {
       const p = index(col, row), i = p * 3;
-      const length = Math.hypot(normals[i], normals[i + 1], normals[i + 2]);
+      const length = Math.sqrt(normals[i] * normals[i] + normals[i + 1] * normals[i + 1] + normals[i + 2] * normals[i + 2]);
       normals[i] /= length; normals[i + 1] /= length; normals[i + 2] /= length;
       const l = index(Math.max(col - 1, 0), row) * 3, r = index(Math.min(col + 1, COLS - 1), row) * 3;
       const u = index(col, Math.max(row - 1, 0)) * 3, d = index(col, Math.min(row + 1, ROWS - 1)) * 3;
